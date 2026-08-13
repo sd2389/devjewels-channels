@@ -1,0 +1,23 @@
+{
+  "name": "devjewels-channels",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @devjewels-channels/core",
+    "build": "npm run build -w @devjewels-channels/core",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "sst:dev": "sst dev",
+    "sst:deploy": "sst deploy"
+  },
+  "devDependencies": {
+    "sst": "^3.17.10",
+    "typescript": "^5.8.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "npm@10"
+}

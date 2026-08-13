@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "paths": {
+      "@devjewels-channels/core/security/vault": ["../core/src/security/vault.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "app/**/*.ts"],
+  "exclude": ["node_modules", "src/**/*.selfcheck.ts"]
+}

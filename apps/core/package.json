@@ -1,0 +1,38 @@
+{
+  "name": "@devjewels-channels/core",
+  "private": true,
+  "version": "0.1.0",
+  "exports": {
+    "./channels/types": "./src/channels/types.ts",
+    "./channels/router": "./src/channels/router.ts",
+    "./security/vault": "./src/security/vault.ts"
+  },
+  "scripts": {
+    "dev": "next dev --port 3100",
+    "build": "next build",
+    "start": "next start --port 3100",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "selfcheck:events": "npx --yes tsx src/services/events.selfcheck.ts",
+    "selfcheck:inventory": "npx --yes tsx src/services/inventory.selfcheck.ts",
+    "selfcheck:catalog": "npx --yes tsx src/services/catalog.selfcheck.ts",
+    "selfcheck:product-sync": "npx --yes tsx src/services/productSync.selfcheck.ts",
+    "selfcheck:orders": "npx --yes tsx src/services/orders.selfcheck.ts",
+    "selfcheck:connect": "npx --yes tsx src/services/connect.selfcheck.ts",
+    "selfcheck:vault": "npx --yes tsx src/security/vault.selfcheck.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sqs": "^3.787.0",
+    "next": "^15.2.0",
+    "pg": "^8.23.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/pg": "^8.21.0",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "typescript": "^5.8.2"
+  }
+}

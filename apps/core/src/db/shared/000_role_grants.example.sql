@@ -1,0 +1,40 @@
+-- Example ops grants for Channels (do not run blindly in production).
+--
+-- HARD RULE (MVP):
+--   Same Postgres DATABASE as DevJewels (e.g. DB_NAME=devjewels).
+--   Separate SCHEMA only: channels.
+--   Do NOT CREATE DATABASE for Channels. Do NOT provision a second RDS for MVP.
+--
+-- Role channels_app: CONNECT to the shared DB + DML ONLY on schema channels.
+-- No USAGE/SELECT on public, diamond, or b2c.
+
+-- Run as a superuser / migration owner on the SHARED DevJewels database:
+--
+-- CREATE SCHEMA IF NOT EXISTS channels;
+--
+-- CREATE ROLE channels_app LOGIN PASSWORD '...';  -- store password in secrets, not git
+--
+-- GRANT CONNECT ON DATABASE current_database() TO channels_app;
+-- -- If your Postgres requires an explicit DB name:
+-- -- GRANT CONNECT ON DATABASE devjewels TO channels_app;
+--
+-- GRANT USAGE, CREATE ON SCHEMA channels TO channels_app;
+-- GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA channels TO channels_app;
+-- GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA channels TO channels_app;
+-- ALTER DEFAULT PRIVILEGES IN SCHEMA channels
+--   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO channels_app;
+-- ALTER DEFAULT PRIVILEGES IN SCHEMA channels
+--   GRANT USAGE, SELECT ON SEQUENCES TO channels_app;
+--
+-- Pin search_path so unqualified SQL cannot drift into public:
+-- ALTER ROLE channels_app IN DATABASE current_database() SET search_path TO channels;
+-- -- or: ALTER ROLE channels_app IN DATABASE devjewels SET search_path TO channels;
+--
+-- Deny DevJewels SoT schemas (explicit — do not rely on "no grant" alone):
+-- REVOKE ALL ON SCHEMA public FROM channels_app;
+-- REVOKE ALL ON SCHEMA diamond FROM channels_app;
+-- REVOKE ALL ON SCHEMA b2c FROM channels_app;
+-- -- Also revoke table-level defaults if the role was previously over-granted:
+-- REVOKE ALL ON ALL TABLES IN SCHEMA public FROM channels_app;
+-- REVOKE ALL ON ALL TABLES IN SCHEMA diamond FROM channels_app;
+-- REVOKE ALL ON ALL TABLES IN SCHEMA b2c FROM channels_app;

@@ -1,0 +1,17 @@
+{
+  "name": "@devjewels-channels/woocommerce",
+  "private": true,
+  "version": "0.1.0",
+  "main": "./src/adapter.ts",
+  "types": "./src/adapter.ts",
+  "exports": {
+    ".": "./src/adapter.ts",
+    "./adapter": "./src/adapter.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  }
+}

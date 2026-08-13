@@ -1,0 +1,35 @@
+{
+  "name": "@devjewels-channels/shopify",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./adapter": "./src/adapter.ts",
+    "./auth": "./src/auth.ts",
+    "./webhooks": "./src/webhooks.ts",
+    "./products": "./src/products.ts",
+    "./orders": "./src/orders.ts",
+    "./auth-route": "./app/api/shopify/auth/route.ts",
+    "./webhooks-route": "./app/api/shopify/webhooks/route.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "selfcheck:inventory": "npx --yes tsx src/inventory.selfcheck.ts",
+    "selfcheck:catalog-orders": "npx --yes tsx src/catalogOrders.selfcheck.ts",
+    "selfcheck:oauth": "npx --yes tsx src/oauth.selfcheck.ts"
+  },
+  "dependencies": {
+    "@devjewels-channels/core": "*"
+  },
+  "peerDependencies": {
+    "next": "^15.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "next": "^15.2.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
