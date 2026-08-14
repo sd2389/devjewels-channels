@@ -6,7 +6,11 @@ import {
   assertServiceAuth,
   ServiceAuthError,
 } from "../security/serviceAuth";
-import { resetMemoryIdempotencyStore, claimEventId } from "./eventIdempotency";
+import {
+  resetMemoryIdempotencyStore,
+  claimEventId,
+  releaseEventId,
+} from "./eventIdempotency";
 import {
   ENTITLEMENT_CHANGED,
   parseEventEnvelope,
@@ -45,7 +49,7 @@ async function main(): Promise<void> {
   delete process.env.PRODUCT_SYNC_QUEUE_URL;
   process.env.CHANNELS_ENQUEUE_SKELETON_ON_UNMAPPED = "1";
   // Force memory idempotency for selfcheck (no DB required).
-  delete process.env.DATABASE_URL;
+  process.env.DATABASE_URL = "";
   // Fan-out requires a connection store; empty memory → skeleton enqueue path.
   setConnectionStoreForTests(createMemoryConnectionStore([]));
 
@@ -88,6 +92,16 @@ async function main(): Promise<void> {
     envelope,
   );
   if (!second.duplicate) throw new Error("second claim should be duplicate");
+  await releaseEventId(envelope.event_id);
+  const retry = await claimEventId(
+    envelope.event_id,
+    envelope.event_type,
+    envelope.occurred_at,
+    envelope,
+  );
+  if (retry.duplicate) {
+    throw new Error("failed fan-out release must allow the same event_id to retry");
+  }
 
   // Unmapped inventory → product.sync skeleton (auto-create path).
   const fanOut = await fanOutInventoryUpdated(envelope);
@@ -167,6 +181,34 @@ async function main(): Promise<void> {
     },
   });
   assert(!unknownAction.success, "unknown entitlement action must fail parse");
+
+  const malformedKeyRevoke = safeParseEventEnvelope({
+    event_id: "selfcheck-ent-key-revoke-with-design",
+    event_type: ENTITLEMENT_CHANGED,
+    occurred_at: "2026-08-12T17:03:00.000Z",
+    data: {
+      customer_id: 42,
+      action: "key_revoked",
+      design_nos: ["D-1"],
+    },
+  });
+  assert(
+    !malformedKeyRevoke.success,
+    "key_revoked with design_nos must fail closed",
+  );
+
+  const unknownField = safeParseEventEnvelope({
+    event_id: "selfcheck-ent-extra-field",
+    event_type: ENTITLEMENT_CHANGED,
+    occurred_at: "2026-08-12T17:03:00.000Z",
+    data: {
+      customer_id: 42,
+      action: "revoke",
+      design_nos: ["D-1"],
+      destructive_scope: "all",
+    },
+  });
+  assert(!unknownField.success, "unknown entitlement fields must fail closed");
 
   const missingCustomer = safeParseEventEnvelope({
     event_id: "selfcheck-ent-no-customer",

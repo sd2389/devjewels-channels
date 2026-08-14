@@ -3,6 +3,7 @@
  * One connection failure must not be handled here as multi-connection fan-out
  * (fan-out already enqueues independent jobs).
  */
+import { registerDefaultAdapters } from "@/channels/registerAdapters";
 import { AdapterRouter } from "@/channels/router";
 import {
   InventorySkipError,
@@ -38,6 +39,7 @@ function safeErrorMessage(err: unknown): string {
 export async function runInventorySyncJob(
   job: InventorySyncJob,
 ): Promise<InventorySyncOutcome> {
+  registerDefaultAdapters();
   if (job.connectionId === "_skeleton") {
     console.info("inventory_sync_skeleton_skip", {
       designNo: job.designNo,
@@ -85,7 +87,9 @@ export async function runInventorySyncJob(
   const { requireSyncableEntitlements, designInFeed } = await import(
     "@/services/entitlements"
   );
-  const entitlements = await requireSyncableEntitlements(connection.customer_id);
+  const entitlements = await requireSyncableEntitlements(connection.customer_id, {
+    fresh: true,
+  });
   if (
     !entitlements ||
     !entitlements.permissions.can_view_inventory ||

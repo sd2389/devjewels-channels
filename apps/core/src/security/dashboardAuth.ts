@@ -4,6 +4,8 @@
  * - If CHANNELS_DASHBOARD_PASSWORD is unset, allow same-origin (local staff UX)
  * - If set, require cookie channels_dashboard=1 after POST /api/admin/login
  */
+import { DeverpHttpError } from "@/integrations/deverp/client";
+import { optionalServerEnv } from "@/config/serverEnv";
 import { cookies } from "next/headers";
 import {
   assertServiceAuth,
@@ -20,7 +22,7 @@ export async function assertAdminRequest(req: Request): Promise<void> {
     return;
   }
 
-  const password = process.env.CHANNELS_DASHBOARD_PASSWORD?.trim();
+  const password = optionalServerEnv("CHANNELS_DASHBOARD_PASSWORD");
   if (!password) {
     // Local / pilot: open dashboard APIs without extra login.
     return;
@@ -36,6 +38,11 @@ export async function assertAdminRequest(req: Request): Promise<void> {
 export function jsonError(err: unknown, fallbackStatus = 500): Response {
   if (err instanceof ServiceAuthError) {
     return Response.json({ error: err.message }, { status: err.status });
+  }
+  if (err instanceof DeverpHttpError) {
+    const status = err.status >= 400 && err.status < 600 ? err.status : fallbackStatus;
+    const message = status >= 500 ? "Request failed" : err.message;
+    return Response.json({ error: message }, { status });
   }
   const message = err instanceof Error ? err.message : "Request failed";
   const status =

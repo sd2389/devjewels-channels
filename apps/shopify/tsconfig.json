@@ -3,7 +3,10 @@
   "compilerOptions": {
     "composite": false,
     "paths": {
-      "@devjewels-channels/core/security/vault": ["../core/src/security/vault.ts"]
+      "@devjewels-channels/core/security/vault": ["../core/src/security/vault.ts"],
+      "@devjewels-channels/core/config/serverEnv": ["../core/src/config/serverEnv.ts"],
+      "@devjewels-channels/shopify/auth": ["./src/auth.ts"],
+      "@devjewels-channels/shopify/webhooks": ["./src/webhooks.ts"]
     }
   },
   "include": ["src/**/*.ts", "app/**/*.ts"],

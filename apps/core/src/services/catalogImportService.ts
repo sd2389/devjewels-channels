@@ -5,6 +5,7 @@
  *
  * Concurrency is capped (no unbounded fan-out).
  */
+import { registerDefaultAdapters } from "@/channels/registerAdapters";
 import { AdapterRouter } from "@/channels/router";
 import { NotImplementedError } from "@/channels/types";
 import { getConnectionById } from "@/services/connections";
@@ -13,12 +14,26 @@ import {
   type CatalogImportRow,
 } from "@/services/catalogImportStore";
 import { deverpClient } from "@/integrations/deverp/client";
+import { resolveChannelVariantPrice } from "@/services/channelUnitPrice";
+import {
+  loadDesignMarkupMap,
+  normalizeDesignNoKey,
+} from "@/services/connectionDesignMarkups";
+import { resolveDesignImageUrls } from "@/services/designImageUrls";
+import { resolveDesignShopifyTaxonomy } from "@/services/designShopifyTaxonomy";
+import { detailsFromInventoryJob } from "@/services/jobVariantDetails";
+import {
+  designInFeed,
+  requireSyncableEntitlements,
+} from "@/services/entitlements";
 import {
   getProductMappingStore,
   upsertProductMapping,
 } from "@/services/productMappings";
 import { getVariantMappingStore } from "@/services/variantMappings";
 import { writeSyncLog } from "@/services/syncLog";
+import { enqueueInventorySync } from "@/services/queue";
+import type { MarkupMode } from "@/services/markup";
 
 const DEFAULT_PAGE_SIZE = 50;
 const DEFAULT_CONCURRENCY = 3;
@@ -70,8 +85,24 @@ async function collectEligibleDesigns(
   customerId: number,
   pageSize: number,
   maxDesigns: number,
-): Promise<Array<{ designNo: string; title: string; totamt?: string }>> {
-  const out: Array<{ designNo: string; title: string; totamt?: string }> = [];
+): Promise<
+  Array<{
+    designNo: string;
+    title: string;
+    totamt?: string;
+    imageUrls: string[];
+    productType?: string;
+    tags: string[];
+  }>
+> {
+  const out: Array<{
+    designNo: string;
+    title: string;
+    totamt?: string;
+    imageUrls: string[];
+    productType?: string;
+    tags: string[];
+  }> = [];
   let afterId: number | null = null;
   while (out.length < maxDesigns) {
     const page = await deverpClient.listCatalogDesigns({
@@ -82,10 +113,25 @@ async function collectEligibleDesigns(
     for (const item of page.items) {
       const designNo = String(item.design_no || "").trim();
       if (!designNo) continue;
+      const taxonomy = resolveDesignShopifyTaxonomy({
+        category: item.category,
+        collection: item.collection,
+        subcategory: item.subcategory,
+        producttype: item.producttype,
+      });
       out.push({
         designNo,
         title: String(item.titleline || designNo).trim() || designNo,
         totamt: item.totamt != null ? String(item.totamt) : undefined,
+        imageUrls: resolveDesignImageUrls({
+          designNo,
+          imageUrls: item.image_urls,
+          thumbnailUrl: item.thumbnail_url,
+          imageBasePath: item.image_base_path,
+          defaultColor: item.default_color,
+        }),
+        productType: taxonomy.productType,
+        tags: taxonomy.tags,
       });
       if (out.length >= maxDesigns) break;
     }
@@ -99,9 +145,20 @@ async function importOneDesign(input: {
   connectionId: string;
   platform: "SHOPIFY" | "WOOCOMMERCE" | "MAGENTO";
   credentialsSecretRef: string | null;
+  customerId: number;
+  canViewPrices: boolean;
+  canViewInventory: boolean;
+  syncInventory: boolean;
+  markupMode?: string | null;
+  markupValue?: number | null;
+  markupBps?: number | null;
+  designMarkup?: { markupMode: MarkupMode | string; markupValue: number } | null;
   designNo: string;
   title: string;
   defaultPrice: number;
+  imageUrls: string[];
+  productType?: string;
+  tags: string[];
 }): Promise<"ok" | "skipped" | "failed"> {
   const inventory = await deverpClient.getInventory(input.designNo);
   const jobs = (inventory.jobs || []).filter((j) => String(j.job_no || "").trim());
@@ -117,17 +174,55 @@ async function importOneDesign(input: {
     return "skipped";
   }
 
-  const variants = jobs.map((j) => ({
-    jobNo: String(j.job_no).trim(),
-    sku: String(j.job_no).trim(),
-    price: parsePrice(j.totamt ?? input.defaultPrice),
-    quantity: 1,
-  }));
+  const variants = [];
+  for (const j of jobs) {
+    const jobNo = String(j.job_no).trim();
+    const price = await resolveChannelVariantPrice({
+      customerId: input.customerId,
+      designNo: input.designNo,
+      jobNo,
+      fallbackPrice: parsePrice(j.totamt ?? input.defaultPrice),
+      canViewPrices: input.canViewPrices,
+      markupMode: input.markupMode,
+      markupValue: input.markupValue,
+      markupBps: input.markupBps,
+      designMarkup: input.designMarkup ?? null,
+    });
+    variants.push({
+      jobNo,
+      sku: jobNo,
+      price,
+      quantity: 1,
+      details: detailsFromInventoryJob(
+        j as Record<string, unknown>,
+        input.productType,
+      ),
+    });
+  }
 
   const adapter = AdapterRouter.get(input.platform);
   const mappingStore = getProductMappingStore();
   const existing = await mappingStore.getByDesign(input.connectionId, input.designNo);
   const variantStore = getVariantMappingStore();
+
+  const liveEntitlements = await requireSyncableEntitlements(input.customerId, {
+    fresh: true,
+  });
+  if (
+    !liveEntitlements ||
+    !liveEntitlements.permissions.can_view_designs ||
+    !designInFeed(liveEntitlements, input.designNo)
+  ) {
+    await writeSyncLog({
+      connectionId: input.connectionId,
+      platform: input.platform,
+      jobType: "product",
+      status: "SKIPPED",
+      designNo: input.designNo,
+      message: "entitlement_revoked_before_import_mutation",
+    });
+    return "skipped";
+  }
 
   try {
     let result;
@@ -153,6 +248,9 @@ async function importOneDesign(input: {
         title: input.title,
         credentialsSecretRef: input.credentialsSecretRef ?? undefined,
         externalProductId: existing.external_product_id,
+        imageUrls: input.imageUrls,
+        productType: input.productType,
+        tags: input.tags,
         variants,
         existingVariants,
       });
@@ -162,6 +260,9 @@ async function importOneDesign(input: {
         designNo: input.designNo,
         title: input.title,
         credentialsSecretRef: input.credentialsSecretRef ?? undefined,
+        imageUrls: input.imageUrls,
+        productType: input.productType,
+        tags: input.tags,
         variants,
       });
     }
@@ -180,6 +281,21 @@ async function importOneDesign(input: {
         externalVariantId: variant.externalVariantId,
         externalInventoryItemId: variant.externalInventoryItemId ?? null,
       });
+    }
+
+    if (input.canViewInventory && input.syncInventory) {
+      for (const variant of result.variants) {
+        const quantity =
+          variants.find((candidate) => candidate.jobNo === variant.jobNo)?.quantity ?? 0;
+        await enqueueInventorySync({
+          kind: "inventory.sync",
+          connectionId: input.connectionId,
+          platform: input.platform,
+          designNo: input.designNo,
+          jobNo: variant.jobNo,
+          quantity,
+        });
+      }
     }
 
     await writeSyncLog({
@@ -241,6 +357,7 @@ export async function createCatalogImportJob(
 export async function runCatalogImport(
   options: RunCatalogImportOptions,
 ): Promise<CatalogImportResult> {
+  registerDefaultAdapters();
   const concurrency = Math.max(
     1,
     Math.min(options.concurrency ?? DEFAULT_CONCURRENCY, 8),
@@ -260,8 +377,9 @@ export async function runCatalogImport(
   }
 
   // No active API key / can_view_designs → empty import (entitlement SoT).
-  const { requireSyncableEntitlements } = await import("@/services/entitlements");
-  const entitlements = await requireSyncableEntitlements(connection.customer_id);
+  const entitlements = await requireSyncableEntitlements(connection.customer_id, {
+    fresh: true,
+  });
   if (!entitlements) {
     throw new Error(
       "Customer has no active API key with can_view_designs — connect requires a Customer API key",
@@ -284,18 +402,33 @@ export async function runCatalogImport(
   );
   await store.markRunning(job.id, designs.length);
 
+  const designMarkupMap = await loadDesignMarkupMap(connection.id);
+
   let failed = 0;
   let skipped = 0;
   let processed = 0;
 
   await mapPool(designs, concurrency, async (design) => {
+    const designOverride =
+      designMarkupMap.get(normalizeDesignNoKey(design.designNo)) ?? null;
     const outcome = await importOneDesign({
       connectionId: connection.id,
       platform: connection.platform,
       credentialsSecretRef: connection.credentials_secret_ref,
+      customerId: connection.customer_id!,
+      canViewPrices: Boolean(entitlements.permissions.can_view_prices),
+      canViewInventory: Boolean(entitlements.permissions.can_view_inventory),
+      syncInventory: connection.sync_inventory,
+      markupMode: connection.markup_mode,
+      markupValue: connection.markup_value,
+      markupBps: connection.markup_bps,
+      designMarkup: designOverride,
       designNo: design.designNo,
       title: design.title,
       defaultPrice: parsePrice(design.totamt),
+      imageUrls: design.imageUrls,
+      productType: design.productType,
+      tags: design.tags,
     });
     if (outcome === "failed") failed += 1;
     else if (outcome === "skipped") skipped += 1;

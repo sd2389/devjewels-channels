@@ -1,6 +1,7 @@
 /**
  * Shopify webhook HTTP handler (core runtime route).
- * Verify HMAC → persist webhook_event (dedupe) → enqueue order-processing → 200 fast.
+ * - Compliance topics (public apps): HMAC with app Client Secret → 200 (even if shop unknown)
+ * - Order topics: connection HMAC → enqueue order-processing
  */
 import { NextRequest, NextResponse } from "next/server";
 import { registerDefaultAdapters } from "@/channels/registerAdapters";
@@ -9,6 +10,12 @@ import { getConnectionById } from "@/services/connections";
 import { resolveShopifyCredentials } from "@/security/secrets";
 import { enqueueOrderProcessing } from "@/services/queue";
 import { getWebhookEventStore } from "@/services/webhookEvents";
+import {
+  handleShopifyCustomerCompliance,
+  handleShopifyShopRedact,
+  isShopifyComplianceTopic,
+} from "@/services/shopifyCompliance";
+import { getShopifyOAuthConfig } from "@devjewels-channels/shopify/auth";
 import {
   headerValue,
   parseShopifyShopDomain,
@@ -41,6 +48,41 @@ async function resolveWebhookSecret(connectionId: string): Promise<string> {
   }
 }
 
+async function handleCompliancePost(
+  rawBody: string,
+  headers: Record<string, string>,
+  topic: string,
+): Promise<NextResponse> {
+  const shopDomain = parseShopifyShopDomain(headers);
+  let apiSecret = "";
+  try {
+    apiSecret = (await getShopifyOAuthConfig()).apiSecret;
+  } catch {
+    apiSecret = (process.env.SHOPIFY_API_SECRET || "").trim();
+  }
+  const hmacHeader =
+    headerValue(headers, "x-shopify-hmac-sha256") ||
+    headerValue(headers, "X-Shopify-Hmac-Sha256");
+  if (
+    !apiSecret ||
+    !verifyShopifyWebhookHmac({ rawBody, hmacHeader, secret: apiSecret })
+  ) {
+    console.warn("shopify_compliance_hmac_rejected", { topic, shopDomain });
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (topic === "shop/redact") {
+    await handleShopifyShopRedact(shopDomain);
+  } else if (topic === "customers/data_request" || topic === "customers/redact") {
+    await handleShopifyCustomerCompliance(topic, shopDomain);
+  }
+
+  return NextResponse.json(
+    { accepted: true, compliance: true, topic },
+    { status: 200 },
+  );
+}
+
 export async function POST(request: NextRequest) {
   const rawBody = await request.text();
   const headers = Object.fromEntries(request.headers.entries());
@@ -49,6 +91,10 @@ export async function POST(request: NextRequest) {
   const externalEventId =
     parseShopifyWebhookId(headers) ||
     `${topic}:${Buffer.from(rawBody).toString("base64url").slice(0, 32)}`;
+
+  if (isShopifyComplianceTopic(topic)) {
+    return handleCompliancePost(rawBody, headers, topic);
+  }
 
   if (!shopDomain) {
     return NextResponse.json({ error: "Missing shop domain" }, { status: 400 });
@@ -83,7 +129,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Keep adapter contract exercised for workers / future platforms.
   process.env.CHANNELS_SHOPIFY_WEBHOOK_SECRET = secret;
   try {
     await AdapterRouter.get("SHOPIFY").verifyWebhook({

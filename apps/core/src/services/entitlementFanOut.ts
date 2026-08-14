@@ -3,12 +3,13 @@
  * permissions_changed. Customer API is SoT — no local design allowlist.
  */
 import {
-  getConnectionByCustomerId,
-  updateConnectionCredentials,
+  listConnectionsByCustomerId,
+  updateConnectionSyncFlags,
   type ConnectionRow,
 } from "@/services/connections";
 import {
   clearEntitlementCache,
+  designInFeed,
   fetchCustomerEntitlements,
   type ChannelPermissions,
   type CustomerEntitlements,
@@ -46,13 +47,10 @@ async function refreshSyncFlagsFromPermissions(
   connection: ConnectionRow,
   permissions: ChannelPermissions,
 ): Promise<ConnectionRow> {
-  const ref = connection.credentials_secret_ref?.trim();
-  if (!ref) {
-    return connection;
-  }
-  const updated = await updateConnectionCredentials(connection.id, ref, {
+  const updated = await updateConnectionSyncFlags(connection.id, {
     syncOrders: permissions.can_place_orders,
     syncInventory: permissions.can_view_inventory,
+    syncPrice: permissions.can_view_prices,
     syncProducts: permissions.can_view_designs,
   });
   return updated ?? connection;
@@ -80,8 +78,8 @@ async function reconcileFeed(
     }
   }
   const syncJobs: ProductSyncJob[] =
-    connection.sync_products
-      ? ent.design_nos.slice(0, 500).map((designNo) => ({
+    connection.is_active && connection.sync_products
+      ? ent.design_nos.map((designNo) => ({
           kind: "product.sync" as const,
           connectionId: connection.id,
           platform: connection.platform,
@@ -96,7 +94,7 @@ async function reconcileFeed(
 export async function fanOutEntitlementChanged(
   event: EntitlementChangedEnvelope,
 ): Promise<{ enqueued: number; action: string }> {
-  clearEntitlementCache();
+  clearEntitlementCache(event.data.customer_id);
   const customerId = event.data.customer_id;
   const action = event.data.action;
 
@@ -108,19 +106,29 @@ export async function fanOutEntitlementChanged(
     return { enqueued: 0, action };
   }
 
-  const connection = await getConnectionByCustomerId(customerId);
-  if (!connection || !connection.is_active) {
+  const connections = await listConnectionsByCustomerId(customerId);
+  if (connections.length === 0) {
     console.info("entitlement_fan_out_skip", {
       event_id: event.event_id,
       customer_id: customerId,
-      reason: connection ? "inactive" : "no_connection",
+      reason: "no_connection",
     });
     return { enqueued: 0, action };
   }
 
   switch (action) {
     case "key_revoked": {
-      const enqueued = await deleteAllMappedDesigns(connection);
+      let enqueued = 0;
+      const flagsOff: ChannelPermissions = {
+        can_view_designs: false,
+        can_view_inventory: false,
+        can_view_prices: false,
+        can_place_orders: false,
+      };
+      for (const connection of connections) {
+        const disabled = await refreshSyncFlagsFromPermissions(connection, flagsOff);
+        enqueued += await deleteAllMappedDesigns(disabled);
+      }
       console.info("entitlement_fan_out", {
         event_id: event.event_id,
         customer_id: customerId,
@@ -131,14 +139,22 @@ export async function fanOutEntitlementChanged(
     }
 
     case "revoke": {
-      const designNos = event.data.design_nos.filter((n) => n.trim());
-      const jobs: ProductSyncJob[] = designNos.map((designNo) => ({
-        kind: "product.sync",
-        connectionId: connection.id,
-        platform: connection.platform,
-        designNo,
-        action: "delete",
-      }));
+      const entitlements = await fetchCustomerEntitlements(customerId, {
+        fresh: true,
+      });
+      const designNos = event.data.design_nos.filter(
+        (designNo) =>
+          designNo.trim() && !designInFeed(entitlements, designNo),
+      );
+      const jobs: ProductSyncJob[] = connections.flatMap((connection) =>
+        designNos.map((designNo) => ({
+          kind: "product.sync" as const,
+          connectionId: connection.id,
+          platform: connection.platform,
+          designNo,
+          action: "delete" as const,
+        })),
+      );
       const enqueued = await enqueueJobs(jobs);
       console.info("entitlement_fan_out", {
         event_id: event.event_id,
@@ -152,22 +168,23 @@ export async function fanOutEntitlementChanged(
     case "grant": {
       let designNos = event.data.design_nos.filter((n) => n.trim());
       if (designNos.length === 0) {
-        const ent = await fetchCustomerEntitlements(customerId);
+        const ent = await fetchCustomerEntitlements(customerId, { fresh: true });
         if (!ent.key_present || !ent.permissions.can_view_designs) {
           return { enqueued: 0, action };
         }
         designNos = ent.design_nos;
       }
-      if (!connection.sync_products) {
-        return { enqueued: 0, action };
-      }
-      const jobs: ProductSyncJob[] = designNos.slice(0, 500).map((designNo) => ({
-        kind: "product.sync",
-        connectionId: connection.id,
-        platform: connection.platform,
-        designNo,
-        action: "sync",
-      }));
+      const jobs: ProductSyncJob[] = connections
+        .filter((connection) => connection.is_active && connection.sync_products)
+        .flatMap((connection) =>
+          designNos.map((designNo) => ({
+            kind: "product.sync" as const,
+            connectionId: connection.id,
+            platform: connection.platform,
+            designNo,
+            action: "sync" as const,
+          })),
+        );
       const enqueued = await enqueueJobs(jobs);
       console.info("entitlement_fan_out", {
         event_id: event.event_id,
@@ -179,31 +196,25 @@ export async function fanOutEntitlementChanged(
     }
 
     case "permissions_changed": {
-      const ent = await fetchCustomerEntitlements(customerId);
+      const ent = await fetchCustomerEntitlements(customerId, { fresh: true });
       const flagsOff: ChannelPermissions = {
         can_view_designs: false,
         can_view_inventory: false,
         can_view_prices: false,
         can_place_orders: false,
       };
-      const refreshed = await refreshSyncFlagsFromPermissions(
-        connection,
-        ent.key_present ? ent.permissions : flagsOff,
-      );
-
-      if (!ent.key_present || !ent.permissions.can_view_designs) {
-        const enqueued = await deleteAllMappedDesigns(refreshed);
-        console.info("entitlement_fan_out", {
-          event_id: event.event_id,
-          customer_id: customerId,
-          action,
-          enqueued,
-          flags_refreshed: true,
-        });
-        return { enqueued, action };
+      let enqueued = 0;
+      for (const connection of connections) {
+        const refreshed = await refreshSyncFlagsFromPermissions(
+          connection,
+          ent.key_present ? ent.permissions : flagsOff,
+        );
+        if (!ent.key_present || !ent.permissions.can_view_designs) {
+          enqueued += await deleteAllMappedDesigns(refreshed);
+        } else {
+          enqueued += await reconcileFeed(refreshed, ent);
+        }
       }
-
-      const enqueued = await reconcileFeed(refreshed, ent);
       console.info("entitlement_fan_out", {
         event_id: event.event_id,
         customer_id: customerId,

@@ -11,12 +11,13 @@ export const ENTITLEMENT_CHANGED = "catalog.entitlement_changed" as const;
 
 const InventoryUpdatedDataSchema = z
   .object({
-    design_no: z.string().min(1),
-    job_no: z.string().min(1).optional(),
-    sku: z.string().min(1).optional(),
+    design_no: z.string().trim().min(1).max(100),
+    job_no: z.string().trim().min(1).max(100).optional(),
+    sku: z.string().trim().min(1).max(100).optional(),
     old_quantity: z.number().int().nonnegative(),
     new_quantity: z.number().int().nonnegative(),
   })
+  .strict()
   .superRefine((data, ctx) => {
     if (!data.job_no && !data.sku) {
       ctx.addIssue({
@@ -34,52 +35,76 @@ const InventoryUpdatedDataSchema = z
   }));
 
 export const InventoryUpdatedEnvelopeSchema = z.object({
-  event_id: z.string().min(1),
+  event_id: z.string().trim().min(1).max(100),
   event_type: z.literal(INVENTORY_UPDATED),
-  occurred_at: z.string().min(1),
+  occurred_at: z.string().datetime({ offset: true }),
   data: InventoryUpdatedDataSchema,
-});
+}).strict();
 
 export const CatalogUpdatedEnvelopeSchema = z.object({
-  event_id: z.string().min(1),
+  event_id: z.string().trim().min(1).max(100),
   event_type: z.literal(CATALOG_UPDATED),
-  occurred_at: z.string().min(1),
+  occurred_at: z.string().datetime({ offset: true }),
   data: z.object({
-    design_no: z.string().min(1),
+    design_no: z.string().trim().min(1).max(100),
     change_type: z.enum(["created", "updated"]).default("updated"),
-    reason: z.string().min(1).default("design_save"),
-  }),
-});
+    reason: z.string().trim().min(1).max(100).default("design_save"),
+  }).strict(),
+}).strict();
 
 export const PriceUpdatedEnvelopeSchema = z.object({
-  event_id: z.string().min(1),
+  event_id: z.string().trim().min(1).max(100),
   event_type: z.literal(PRICE_UPDATED),
-  occurred_at: z.string().min(1),
+  occurred_at: z.string().datetime({ offset: true }),
   data: z.object({
-    design_no: z.string().min(1),
-    job_no: z.string().min(1),
-    price: z.number(),
-    currency: z.string().min(1),
-  }),
-});
+    design_no: z.string().trim().min(1).max(100),
+    job_no: z.string().trim().min(1).max(100),
+    price: z.number().nonnegative(),
+    currency: z.string().trim().length(3),
+  }).strict(),
+}).strict();
 
-export const EntitlementChangedEnvelopeSchema = z.object({
-  event_id: z.string().min(1),
-  event_type: z.literal(ENTITLEMENT_CHANGED),
-  occurred_at: z.string().min(1),
-  data: z.object({
-    customer_id: z.number().int().positive(),
-    action: z.enum([
-      "grant",
-      "revoke",
-      "key_revoked",
-      "permissions_changed",
-    ]),
-    design_nos: z.array(z.string()).default([]),
-  }),
-});
+export const EntitlementChangedEnvelopeSchema = z
+  .object({
+    event_id: z.string().trim().min(1).max(100),
+    event_type: z.literal(ENTITLEMENT_CHANGED),
+    occurred_at: z.string().datetime({ offset: true }),
+    data: z
+      .object({
+        customer_id: z.number().int().positive(),
+        action: z.enum([
+          "grant",
+          "revoke",
+          "key_revoked",
+          "permissions_changed",
+        ]),
+        design_nos: z
+          .array(z.string().trim().min(1).max(100))
+          .max(5000)
+          .default([]),
+      })
+      .strict()
+      .superRefine((data, ctx) => {
+        const designAction = data.action === "grant" || data.action === "revoke";
+        if (designAction && data.design_nos.length === 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `${data.action} requires at least one design_no`,
+            path: ["design_nos"],
+          });
+        }
+        if (!designAction && data.design_nos.length > 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `${data.action} does not accept design_nos`,
+            path: ["design_nos"],
+          });
+        }
+      }),
+  })
+  .strict();
 
-export const ChannelsEventEnvelopeSchema = z.discriminatedUnion("event_type", [
+export const ChannelsEventEnvelopeSchema = z.union([
   InventoryUpdatedEnvelopeSchema,
   CatalogUpdatedEnvelopeSchema,
   PriceUpdatedEnvelopeSchema,

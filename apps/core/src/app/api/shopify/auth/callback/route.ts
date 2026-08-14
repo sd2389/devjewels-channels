@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { optionalProcessEnv } from "@/config/serverEnv";
 import {
   exchangeShopifyOAuthCode,
   getShopifyOAuthConfig,
@@ -20,7 +21,7 @@ export async function GET(request: NextRequest) {
 
   const dashboard = (path: string) => {
     const base =
-      process.env.CHANNELS_PUBLIC_BASE_URL?.trim().replace(/\/$/, "") ||
+      optionalProcessEnv("CHANNELS_PUBLIC_BASE_URL")?.replace(/\/$/, "") ||
       request.nextUrl.origin;
     return NextResponse.redirect(new URL(path, `${base}/`));
   };

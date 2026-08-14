@@ -3,7 +3,7 @@ import {
   assertServiceAuth,
   ServiceAuthError,
 } from "@/security/serviceAuth";
-import { claimEventId } from "@/services/eventIdempotency";
+import { claimEventId, releaseEventId } from "@/services/eventIdempotency";
 import {
   CATALOG_UPDATED,
   ENTITLEMENT_CHANGED,
@@ -55,12 +55,24 @@ export async function POST(request: NextRequest) {
   }
 
   const event = parsed.data;
-  const claim = await claimEventId(
-    event.event_id,
-    event.event_type,
-    event.occurred_at,
-    event,
-  );
+  let claim;
+  try {
+    claim = await claimEventId(
+      event.event_id,
+      event.event_type,
+      event.occurred_at,
+      event,
+    );
+  } catch (err) {
+    console.error("event_idempotency_unavailable", {
+      event_id: event.event_id,
+      error_type: err instanceof Error ? err.name : "Error",
+    });
+    return NextResponse.json(
+      { error: "Event persistence unavailable" },
+      { status: 503 },
+    );
+  }
   if (claim.duplicate) {
     return NextResponse.json(
       {
@@ -89,6 +101,7 @@ export async function POST(request: NextRequest) {
         { status: 202 },
       );
     } catch (err) {
+      await releaseEventId(event.event_id);
       console.error("inventory_fan_out_failed", {
         event_id: event.event_id,
         error_type: err instanceof Error ? err.name : "Error",
@@ -115,6 +128,7 @@ export async function POST(request: NextRequest) {
         { status: 202 },
       );
     } catch (err) {
+      await releaseEventId(event.event_id);
       console.error("catalog_fan_out_failed", {
         event_id: event.event_id,
         error_type: err instanceof Error ? err.name : "Error",
@@ -141,6 +155,7 @@ export async function POST(request: NextRequest) {
         { status: 202 },
       );
     } catch (err) {
+      await releaseEventId(event.event_id);
       console.error("price_fan_out_failed", {
         event_id: event.event_id,
         error_type: err instanceof Error ? err.name : "Error",
@@ -166,6 +181,7 @@ export async function POST(request: NextRequest) {
         { status: 202 },
       );
     } catch (err) {
+      await releaseEventId(event.event_id);
       console.error("entitlement_fan_out_failed", {
         event_id: event.event_id,
         error_type: err instanceof Error ? err.name : "Error",

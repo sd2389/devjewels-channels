@@ -18,6 +18,7 @@ import {
   verifyShopifyOAuthCallbackHmac,
   DEFAULT_SHOPIFY_SCOPES,
 } from "./auth";
+import { resolveVaultRoot } from "@devjewels-channels/core/security/vault";
 import {
   createMemoryShopifyMetaStore,
   setShopifyMetaStoreForTests,
@@ -37,6 +38,17 @@ function setOauthEnv(): void {
 }
 
 async function main(): Promise<void> {
+  const prevVaultDir = process.env.CHANNELS_VAULT_DIR;
+  delete process.env.CHANNELS_VAULT_DIR;
+  const defaultRoot = resolveVaultRoot().replace(/\\/g, "/");
+  if (!defaultRoot.endsWith(".data/secrets")) {
+    throw new Error("default vault root must end with .data/secrets");
+  }
+  if (defaultRoot.includes("apps/core/.data")) {
+    throw new Error("vault root must not be under apps/core");
+  }
+  if (prevVaultDir) process.env.CHANNELS_VAULT_DIR = prevVaultDir;
+
   const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "channels-oauth-selfcheck-"));
   process.env.CHANNELS_VAULT_DIR = vaultDir;
   setOauthEnv();

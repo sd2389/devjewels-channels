@@ -3,6 +3,8 @@
  * Channels must never query public tables — only these endpoints.
  */
 
+import { requiredServerEnv } from "../../config/serverEnv";
+
 export type DeverpInventoryJob = {
   design_no: string;
   job_no: string;
@@ -96,6 +98,23 @@ export type DeverpReserveOrderResult = {
   connection_id: string;
 };
 
+export type ChannelsCustomerHit = {
+  id: number;
+  name: string;
+  email: string;
+  has_active_api_key: boolean;
+};
+
+export type ChannelsCustomerPage = {
+  items: ChannelsCustomerHit[];
+  limit: number;
+  offset: number;
+  total: number;
+  has_more: boolean;
+};
+
+const CUSTOMER_Q_MAX_LEN = 100;
+
 export type DeverpClient = {
   listCatalogDesigns(input: {
     customerId: number;
@@ -131,18 +150,11 @@ export class DeverpHttpError extends Error {
 }
 
 function apiBase(): string {
-  const base = process.env.DEVJEWELS_API_BASE_URL;
-  if (!base) {
-    throw new Error("DEVJEWELS_API_BASE_URL is not configured");
-  }
-  return base.replace(/\/$/, "");
+  return requiredServerEnv("DEVJEWELS_API_BASE_URL").replace(/\/$/, "");
 }
 
 function serviceHeaders(): HeadersInit {
-  const token = process.env.CHANNELS_SERVICE_TOKEN;
-  if (!token) {
-    throw new Error("CHANNELS_SERVICE_TOKEN is not configured");
-  }
+  const token = requiredServerEnv("CHANNELS_SERVICE_TOKEN");
   return {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
@@ -323,6 +335,37 @@ export function createHttpDeverpClient(
       return unwrapData<DeverpReserveOrderResult>(body, response.status);
     },
   };
+}
+
+export async function listChannelsCustomers(
+  input: { q?: string; limit?: number; offset?: number } = {},
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<ChannelsCustomerPage> {
+  const q = (input.q ?? "").trim();
+  if (q.length > CUSTOMER_Q_MAX_LEN) {
+    throw new DeverpHttpError(400, "Query is too long.");
+  }
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  params.set("limit", String(Math.min(input.limit ?? 50, 50)));
+  if (input.offset != null) params.set("offset", String(Math.max(0, input.offset)));
+  const url = `${apiBase()}/api/v1/internal/channels/customers/?${params}`;
+  const response = await fetchImpl(url, {
+    method: "GET",
+    headers: serviceHeaders(),
+  });
+  const body = await parseJson(response);
+  if (!response.ok) {
+    const errMsg =
+      body &&
+      typeof body === "object" &&
+      "error" in body &&
+      typeof (body as { error: unknown }).error === "string"
+        ? (body as { error: string }).error
+        : `listChannelsCustomers HTTP ${response.status}`;
+    throw new DeverpHttpError(response.status, errMsg, body);
+  }
+  return unwrapData<ChannelsCustomerPage>(body, response.status);
 }
 
 /** Live client — overridable in tests. */

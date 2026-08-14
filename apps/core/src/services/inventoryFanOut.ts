@@ -3,6 +3,7 @@
  * When unmapped, enqueue product.sync for entitled connections only.
  */
 import { CHANNELS_SCHEMA, tryGetChannelsDb } from "@/db/shared/client";
+import { optionalServerEnv } from "@/config/serverEnv";
 import type { InventoryUpdatedEnvelope } from "@/services/events";
 import { fanOutProductSyncForDesign } from "@/services/catalogFanOut";
 import { listActiveConnectionsWithCustomer } from "@/services/connections";
@@ -67,7 +68,7 @@ async function loadVariantMappings(
 }
 
 function skeletonEnabled(): boolean {
-  const raw = (process.env.CHANNELS_ENQUEUE_SKELETON_ON_UNMAPPED ?? "0")
+  const raw = (optionalServerEnv("CHANNELS_ENQUEUE_SKELETON_ON_UNMAPPED") ?? "0")
     .trim()
     .toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";

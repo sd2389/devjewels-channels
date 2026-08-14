@@ -7,6 +7,21 @@ export type DesignJobKey = {
   jobNo: string;
 };
 
+/** Merchant-visible job details (Shopify variant metafields / description). */
+export type ChannelJobVariantDetails = {
+  store?: string;
+  category?: string;
+  metal?: string;
+  purity?: string;
+  color?: string;
+  diaQly?: string;
+  diaClr?: string;
+  size?: string;
+  gwt?: string;
+  nwt?: string;
+  dwt?: string;
+};
+
 export type InventoryUpdateInput = DesignJobKey & {
   connectionId: string;
   quantity: number;
@@ -44,12 +59,20 @@ export type CreateProductInput = {
   title: string;
   /** Secret ref from connection.credentials_secret_ref (never a raw token). */
   credentialsSecretRef?: string;
+  /** Public HTTPS image URLs Shopify can fetch (CDN). */
+  imageUrls?: string[];
+  /** Shopify Product type — DevJewels design.category. */
+  productType?: string;
+  /** Shopify tags — collection / subcategory / producttype. */
+  tags?: string[];
   /** Variants keyed by job_no for mapping. */
   variants: Array<{
     jobNo: string;
     sku?: string;
     price: number;
     quantity: number;
+    /** Live stock attributes for Shopify metafields / description. */
+    details?: ChannelJobVariantDetails;
   }>;
 };
 

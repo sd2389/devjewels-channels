@@ -1,6 +1,10 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState, type CSSProperties } from "react";
+import {
+  assignTopLocation,
+  buildShopifyInstallAuthUrl,
+} from "./shopifyInstallNav";
 
 type LocationRow = {
   connection_id: string;
@@ -31,6 +35,12 @@ type ImportResult = {
   failed: number;
   skipped: number;
   totalDesigns: number;
+};
+
+type DesignMarkupDraft = {
+  designNo: string;
+  markupMode: "none" | "percent" | "multiplier";
+  markupValue: string;
 };
 
 type OauthConfigStatus = {
@@ -115,13 +125,23 @@ const cardStyle: CSSProperties = {
   marginBottom: "1rem",
 };
 
+type CustomerHit = {
+  id: number;
+  name: string;
+  email: string;
+  has_active_api_key: boolean;
+};
+
+const LOCAL_HINT_EMAIL = "smssmit@gmail.com";
+const CUSTOMER_Q_MAX = 100;
+
 const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   missing_oauth_params: "Shopify install was cancelled or incomplete.",
   invalid_hmac: "Shopify install failed security check. Try again.",
   invalid_state: "Install session expired. Click Install Shopify again.",
   oauth_not_configured:
     "Save Partner Client ID and Secret once in the dashboard (Shopify app settings).",
-  missing_customer: "Select a DevJewels customer_id before Install Shopify.",
+  missing_customer: "Select a DevJewels customer before Install Shopify.",
   connect_failed: "Could not finish Shopify install. Try again or use token paste.",
 };
 
@@ -145,7 +165,14 @@ export function ConnectDashboard() {
   const [partnerApiKey, setPartnerApiKey] = useState("");
   const [partnerApiSecret, setPartnerApiSecret] = useState("");
   const [oauthShop, setOauthShop] = useState("");
-  const [customerId, setCustomerId] = useState("");
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [customerResults, setCustomerResults] = useState<CustomerHit[]>([]);
+  const [customerSearchReady, setCustomerSearchReady] = useState(false);
+  const [customerSearching, setCustomerSearching] = useState(false);
+  const [customerSearchError, setCustomerSearchError] = useState<string | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerHit | null>(null);
+  const [showManualId, setShowManualId] = useState(false);
+  const [manualId, setManualId] = useState("");
   const [markupMode, setMarkupMode] = useState<"none" | "percent" | "multiplier">(
     "none",
   );
@@ -158,6 +185,13 @@ export function ConnectDashboard() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [locationId, setLocationId] = useState("");
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [editMarkupMode, setEditMarkupMode] = useState<
+    "none" | "percent" | "multiplier"
+  >("none");
+  const [editMarkupValue, setEditMarkupValue] = useState("0");
+  const [designMarkupDrafts, setDesignMarkupDrafts] = useState<DesignMarkupDraft[]>(
+    [],
+  );
 
   const refreshOauthConfig = useCallback(async () => {
     const data = await api<OauthConfigStatus>("/api/admin/shopify-oauth-config");
@@ -186,6 +220,62 @@ export function ConnectDashboard() {
       );
     }
   }, [selectedId]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = (params.get("q") || params.get("customer_email") || "").trim();
+    const host = window.location.hostname;
+    const localHint =
+      host === "localhost" || host === "127.0.0.1" ? LOCAL_HINT_EMAIL : "";
+    setCustomerQuery(fromUrl || localHint);
+    setCustomerSearchReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!customerSearchReady) return;
+    const q = customerQuery.trim();
+    if (q.length > CUSTOMER_Q_MAX) {
+      setCustomerSearchError("Customer search is too long.");
+      return;
+    }
+    let cancelled = false;
+    const handle = window.setTimeout(() => {
+      setCustomerSearching(true);
+      setCustomerSearchError(null);
+      api<{ items: CustomerHit[] }>(
+        `/api/admin/customers?q=${encodeURIComponent(q)}&limit=50`,
+      )
+        .then((data) => {
+          if (cancelled) return;
+          setCustomerSearchError(null);
+          const items = data.items || [];
+          setCustomerResults(items);
+          setSelectedCustomer((current) => {
+            if (current) {
+              return items.find((row) => row.id === current.id) ?? current;
+            }
+            const needle = (q || LOCAL_HINT_EMAIL).toLowerCase();
+            return (
+              items.find((row) => row.email.toLowerCase() === needle) ??
+              items.find((row) => row.email.toLowerCase() === LOCAL_HINT_EMAIL) ??
+              null
+            );
+          });
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setCustomerResults([]);
+          setCustomerSearchError(humanError(err));
+        })
+        .finally(() => {
+          if (!cancelled) setCustomerSearching(false);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [customerQuery, customerSearchReady]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -229,6 +319,44 @@ export function ConnectDashboard() {
 
   const selected = connections.find((c) => c.id === selectedId) ?? null;
 
+  const hydrateMarkupFromConnection = useCallback(async (connectionId: string) => {
+    try {
+      const detail = await api<{
+        connection: { markup_mode?: string; markup_value?: number };
+        design_markups?: Array<{
+          design_no: string;
+          markup_mode: string;
+          markup_value: number;
+        }>;
+      }>(`/api/admin/connections/${connectionId}`);
+      const mode = (detail.connection.markup_mode || "none") as
+        | "none"
+        | "percent"
+        | "multiplier";
+      setEditMarkupMode(
+        mode === "percent" || mode === "multiplier" ? mode : "none",
+      );
+      setEditMarkupValue(String(detail.connection.markup_value ?? 0));
+      setDesignMarkupDrafts(
+        (detail.design_markups || []).map((r) => ({
+          designNo: r.design_no,
+          markupMode:
+            r.markup_mode === "percent" || r.markup_mode === "multiplier"
+              ? r.markup_mode
+              : "none",
+          markupValue: String(r.markup_value ?? 0),
+        })),
+      );
+    } catch {
+      setDesignMarkupDrafts([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    void hydrateMarkupFromConnection(selectedId);
+  }, [selectedId, hydrateMarkupFromConnection]);
+
   async function onSaveOauthApp(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -255,55 +383,33 @@ export function ConnectDashboard() {
     }
   }
 
-  async function onInstall(e: FormEvent) {
+  function onInstall(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setStatus(null);
-    const shop = oauthShop.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, "");
-    const cid = Number(customerId);
-    if (!shop) {
-      setError("Enter your shop domain (your-store.myshopify.com)");
+    const cid = selectedCustomer?.id ?? 0;
+    if (!selectedCustomer || !Number.isInteger(cid) || cid <= 0) {
+      setError("Select a DevJewels customer. Customer must have an active API key.");
       return;
     }
-    if (!Number.isInteger(cid) || cid <= 0) {
-      setError("Enter DevJewels customer_id (Customer.pk). Customer must have an active API key.");
+    if (!selectedCustomer.has_active_api_key) {
+      setError(
+        "This customer has no active API key. Create one in Admin → Customers before Install Shopify. The key is mandatory.",
+      );
       return;
     }
-    const startUrl = `/api/shopify/auth?shop=${encodeURIComponent(shop)}&customer_id=${encodeURIComponent(String(cid))}`;
     try {
+      // Full top-frame navigation — never fetch /api/shopify/auth (opaque 302 hides Location).
+      // window.top so Admin → Channels iframe can reach Shopify authorize (not framable).
+      const startUrl = buildShopifyInstallAuthUrl(
+        window.location.origin,
+        oauthShop,
+        cid,
+      );
       setBusy(true);
-      const res = await fetch(startUrl, { redirect: "manual" });
-      if (res.status >= 300 && res.status < 400) {
-        const location = res.headers.get("Location");
-        if (location) {
-          window.location.href = location;
-          return;
-        }
-      }
-      if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as unknown;
-        const msg =
-          body &&
-          typeof body === "object" &&
-          "error" in body &&
-          typeof (body as { error: unknown }).error === "string"
-            ? (body as { error: string }).error.trim()
-            : "";
-        setError(
-          msg ||
-            OAUTH_ERROR_MESSAGES.oauth_not_configured ||
-            "Shopify OAuth start failed",
-        );
-        if (res.status === 503) {
-          setOauthConfigured(false);
-          setShowUpdateCreds(true);
-        }
-        return;
-      }
-      window.location.href = startUrl;
+      assignTopLocation(startUrl);
     } catch (err) {
       setError(humanError(err));
-    } finally {
       setBusy(false);
     }
   }
@@ -315,9 +421,14 @@ export function ConnectDashboard() {
     setStatus(null);
     setImportResult(null);
     try {
-      const cid = Number(customerId);
-      if (!Number.isInteger(cid) || cid <= 0) {
-        throw new Error("customer_id is required");
+      const cid = selectedCustomer?.id ?? 0;
+      if (!selectedCustomer || !Number.isInteger(cid) || cid <= 0) {
+        throw new Error("Select a DevJewels customer first");
+      }
+      if (!selectedCustomer.has_active_api_key) {
+        throw new Error(
+          "This customer has no active API key. Create one in Admin → Customers first. The key is mandatory.",
+        );
       }
       const data = await api<{
         connection: { id: string };
@@ -377,6 +488,62 @@ export function ConnectDashboard() {
     }
   }
 
+  async function onSaveMarkup() {
+    if (!selectedId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const designMarkups = designMarkupDrafts
+        .map((row) => ({
+          designNo: row.designNo.trim(),
+          markupMode: row.markupMode,
+          markupValue: Number(row.markupValue) || 0,
+        }))
+        .filter((row) => row.designNo.length > 0);
+      const data = await api<{
+        connection: { markup_mode: string; markup_value: number };
+        design_markups: Array<{
+          design_no: string;
+          markup_mode: string;
+          markup_value: number;
+        }>;
+      }>(`/api/admin/connections/${selectedId}`, {
+        method: "POST",
+        body: JSON.stringify({
+          action: "set_markup",
+          markupMode: editMarkupMode,
+          markupValue: Number(editMarkupValue) || 0,
+          designMarkups,
+        }),
+      });
+      setEditMarkupMode(
+        data.connection.markup_mode === "percent" ||
+          data.connection.markup_mode === "multiplier"
+          ? data.connection.markup_mode
+          : "none",
+      );
+      setEditMarkupValue(String(data.connection.markup_value ?? 0));
+      setDesignMarkupDrafts(
+        (data.design_markups || []).map((r) => ({
+          designNo: r.design_no,
+          markupMode:
+            r.markup_mode === "percent" || r.markup_mode === "multiplier"
+              ? r.markup_mode
+              : "none",
+          markupValue: String(r.markup_value ?? 0),
+        })),
+      );
+      setStatus(
+        "Markup saved. Re-import or product sync to push prices to Shopify.",
+      );
+      await refresh();
+    } catch (err) {
+      setError(humanError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onImport() {
     if (!selectedId) return;
     setBusy(true);
@@ -408,8 +575,9 @@ export function ConnectDashboard() {
         Connect Shopify
       </h1>
       <p style={{ opacity: 0.8, lineHeight: 1.5, marginBottom: "1.25rem", maxWidth: "65ch" }}>
-        Bind one Shopify shop to one DevJewels customer. Save Partner app credentials once,
-        then Install Shopify per store.
+        Bind one Shopify shop to one DevJewels customer. Search by name or email,
+        then Install Shopify per store. For many customers, the Partner app must use
+        Public distribution (see docs/MANY_CUSTOMERS_PUBLIC_APP.md) — Custom is link-per-shop only.
       </p>
 
       {error ? (
@@ -440,13 +608,13 @@ export function ConnectDashboard() {
         </div>
       ) : null}
 
-      {oauthConfigured ? (
+      {oauthConfigured === true ? (
         <section style={cardStyle} aria-labelledby="app-connected-heading">
           <h2 id="app-connected-heading" style={{ fontSize: "1.05rem", margin: "0 0 0.5rem" }}>
             Shopify app connected
           </h2>
           <p style={{ margin: "0 0 0.5rem", opacity: 0.85, lineHeight: 1.45 }}>
-            Install stores below.
+            Partner credentials saved — Install stores below.
             {apiKeyLast4 ? ` Client ID ending in ${apiKeyLast4}.` : ""}
           </p>
           <button
@@ -504,7 +672,9 @@ export function ConnectDashboard() {
             </form>
           ) : null}
         </section>
-      ) : (
+      ) : null}
+
+      {oauthConfigured === false ? (
         <section style={cardStyle} aria-labelledby="partner-app-heading">
           <h2 id="partner-app-heading" style={{ fontSize: "1.05rem", margin: "0 0 0.5rem" }}>
             Shopify Partner app (one-time)
@@ -550,7 +720,7 @@ export function ConnectDashboard() {
             </button>
           </form>
         </section>
-      )}
+      ) : null}
 
       <section style={cardStyle} aria-labelledby="install-heading">
         <h2 id="install-heading" style={{ fontSize: "1.05rem", margin: "0 0 1rem" }}>
@@ -558,20 +728,154 @@ export function ConnectDashboard() {
         </h2>
         <form onSubmit={onInstall} style={{ display: "grid", gap: "0.85rem" }}>
           <div>
-            <label htmlFor="customer-id" style={labelStyle}>
-              DevJewels customer_id
+            <label htmlFor="customer-search" style={labelStyle}>
+              DevJewels customer
             </label>
             <input
-              id="customer-id"
-              name="customerId"
-              inputMode="numeric"
+              id="customer-search"
+              name="customerSearch"
               autoComplete="off"
-              placeholder="e.g. 42"
-              value={customerId}
-              onChange={(e) => setCustomerId(e.target.value)}
+              placeholder="Search name, email, or customer id"
+              value={customerQuery}
+              onChange={(e) => setCustomerQuery(e.target.value)}
               style={fieldStyle}
-              required
+              aria-controls="customer-results"
+              aria-expanded={customerResults.length > 0}
             />
+            <p style={{ fontSize: "0.8rem", opacity: 0.65, margin: "0.35rem 0 0" }}>
+              {customerSearching ? "Searching…" : "Click a customer to select."}
+            </p>
+            <ul
+              id="customer-results"
+              role="listbox"
+              aria-label="Customer search results"
+              style={{
+                listStyle: "none",
+                margin: "0.5rem 0 0",
+                padding: 0,
+                maxHeight: 220,
+                overflowY: "auto",
+                border: customerResults.length ? "1px solid #3a4150" : "none",
+                borderRadius: 6,
+              }}
+            >
+              {customerResults.map((row) => {
+                const isSelected = selectedCustomer?.id === row.id;
+                const isHint = row.email.toLowerCase() === LOCAL_HINT_EMAIL;
+                return (
+                  <li key={row.id} role="option" aria-selected={isSelected}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCustomer(row)}
+                      style={{
+                        ...fieldStyle,
+                        border: "none",
+                        borderRadius: 0,
+                        textAlign: "left",
+                        cursor: "pointer",
+                        background: isSelected ? "#2a2410" : "transparent",
+                        outline: isHint && !isSelected ? "1px solid #c9a227" : undefined,
+                      }}
+                    >
+                      <strong>{row.name}</strong>
+                      <span style={{ opacity: 0.8 }}> · {row.email}</span>
+                      <span style={{ opacity: 0.55 }}> · id {row.id}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {customerSearchError ? (
+              <p
+                role="alert"
+                style={{ fontSize: "0.85rem", color: "#f0c0c0", margin: "0.5rem 0 0" }}
+              >
+                {customerSearchError}
+              </p>
+            ) : null}
+            {customerSearchReady &&
+            !customerSearching &&
+            !customerSearchError &&
+            customerResults.length === 0 ? (
+              <p style={{ fontSize: "0.85rem", opacity: 0.7, margin: "0.5rem 0 0" }}>
+                No customers match that search.
+              </p>
+            ) : null}
+          </div>
+          {selectedCustomer ? (
+            <div
+              role="status"
+              style={{
+                border: "1px solid #3a5a3a",
+                borderRadius: 6,
+                padding: "0.75rem",
+                background: "#172217",
+              }}
+            >
+              <div style={{ fontWeight: 600 }}>{selectedCustomer.name}</div>
+              <div style={{ opacity: 0.85, marginTop: 4 }}>
+                {selectedCustomer.email} · id {selectedCustomer.id}
+              </div>
+              {!selectedCustomer.has_active_api_key ? (
+                <p style={{ color: "#f0c0c0", margin: "0.6rem 0 0", lineHeight: 1.45 }}>
+                  This customer has no active API key. Create one in Admin → Customers
+                  before Install Shopify. The key is mandatory for channel sync.
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p style={{ fontSize: "0.85rem", opacity: 0.7, margin: 0 }}>
+              Select a customer to enable Install Shopify.
+            </p>
+          )}
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowManualId((v) => !v)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#e8eaed",
+                font: "inherit",
+                cursor: "pointer",
+                padding: 0,
+                minHeight: 44,
+                textAlign: "left",
+                opacity: 0.75,
+              }}
+              aria-expanded={showManualId}
+            >
+              {showManualId ? "▾" : "▸"} Enter customer ID manually
+            </button>
+            {showManualId ? (
+              <div style={{ marginTop: "0.5rem" }}>
+                <label htmlFor="manual-customer-id" style={labelStyle}>
+                  Customer ID
+                </label>
+                <input
+                  id="manual-customer-id"
+                  name="manualCustomerId"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  placeholder="e.g. 1632"
+                  value={manualId}
+                  onChange={(e) => setManualId(e.target.value)}
+                  style={fieldStyle}
+                />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    const raw = manualId.trim();
+                    if (!raw) return;
+                    setCustomerQuery(raw);
+                  }}
+                  style={{ ...btnSecondary, marginTop: "0.5rem" }}
+                >
+                  Look up ID
+                </button>
+              </div>
+            ) : null}
           </div>
           <div>
             <label htmlFor="oauth-shop" style={labelStyle}>
@@ -588,7 +892,23 @@ export function ConnectDashboard() {
               required
             />
           </div>
-          <button type="submit" disabled={busy} style={btnPrimary}>
+          <button
+            type="submit"
+            disabled={
+              busy || !selectedCustomer || !selectedCustomer.has_active_api_key
+            }
+            style={{
+              ...btnPrimary,
+              opacity:
+                busy || !selectedCustomer || !selectedCustomer.has_active_api_key
+                  ? 0.5
+                  : 1,
+              cursor:
+                busy || !selectedCustomer || !selectedCustomer.has_active_api_key
+                  ? "not-allowed"
+                  : "pointer",
+            }}
+          >
             {busy ? "Starting…" : "Install Shopify"}
           </button>
         </form>
@@ -669,18 +989,13 @@ export function ConnectDashboard() {
                 />
               </div>
               <div>
-                <label htmlFor="token-customer-id" style={labelStyle}>
-                  DevJewels customer_id
-                </label>
-                <input
-                  id="token-customer-id"
-                  name="customerId"
-                  inputMode="numeric"
-                  value={customerId}
-                  onChange={(e) => setCustomerId(e.target.value)}
-                  style={fieldStyle}
-                  required
-                />
+                <p style={{ fontSize: "0.85rem", opacity: 0.8, margin: "0 0 0.35rem" }}>
+                  Uses the customer selected above
+                  {selectedCustomer
+                    ? ` (${selectedCustomer.name} · ${selectedCustomer.email} · id ${selectedCustomer.id})`
+                    : " — select a customer first"}
+                  .
+                </p>
               </div>
               <div>
                 <label htmlFor="markup-mode" style={labelStyle}>
@@ -714,7 +1029,13 @@ export function ConnectDashboard() {
                   />
                 </div>
               ) : null}
-              <button type="submit" disabled={busy} style={btnSecondary}>
+              <button
+                type="submit"
+                disabled={
+                  busy || !selectedCustomer || !selectedCustomer.has_active_api_key
+                }
+                style={btnSecondary}
+              >
                 {busy ? "Connecting…" : "Connect with token"}
               </button>
             </form>
@@ -783,6 +1104,226 @@ export function ConnectDashboard() {
                   ))}
                 </select>
               </div>
+
+              <div
+                style={{
+                  borderTop: "1px solid #2a2f3a",
+                  paddingTop: "1rem",
+                  marginBottom: "1rem",
+                }}
+              >
+                <h3 style={{ fontSize: "0.95rem", margin: "0 0 0.5rem" }}>
+                  Price markup
+                </h3>
+                <p
+                  style={{
+                    fontSize: "0.8rem",
+                    opacity: 0.7,
+                    margin: "0 0 0.85rem",
+                    lineHeight: 1.45,
+                  }}
+                >
+                  Applied after DevJewels funnel final_price. Per-design overrides
+                  win over overall.
+                </p>
+                <div style={{ display: "grid", gap: "0.85rem" }}>
+                  <div>
+                    <label htmlFor="edit-markup-mode" style={labelStyle}>
+                      Overall markup
+                    </label>
+                    <select
+                      id="edit-markup-mode"
+                      value={editMarkupMode}
+                      onChange={(e) =>
+                        setEditMarkupMode(
+                          e.target.value as "none" | "percent" | "multiplier",
+                        )
+                      }
+                      style={fieldStyle}
+                    >
+                      <option value="none">None (push API price)</option>
+                      <option value="percent">Percent (+%)</option>
+                      <option value="multiplier">Multiplier (×)</option>
+                    </select>
+                  </div>
+                  {editMarkupMode !== "none" ? (
+                    <div>
+                      <label htmlFor="edit-markup-value" style={labelStyle}>
+                        Overall value
+                      </label>
+                      <input
+                        id="edit-markup-value"
+                        name="editMarkupValue"
+                        inputMode="decimal"
+                        value={editMarkupValue}
+                        onChange={(e) => setEditMarkupValue(e.target.value)}
+                        style={fieldStyle}
+                      />
+                    </div>
+                  ) : null}
+
+                  <div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "0.5rem",
+                        marginBottom: "0.5rem",
+                      }}
+                    >
+                      <label style={{ ...labelStyle, marginBottom: 0 }}>
+                        Design overrides (optional)
+                      </label>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          setDesignMarkupDrafts((rows) => [
+                            ...rows,
+                            {
+                              designNo: "",
+                              markupMode: "multiplier",
+                              markupValue: "3",
+                            },
+                          ])
+                        }
+                        style={{
+                          ...btnSecondary,
+                          minHeight: 44,
+                          padding: "0.4rem 0.85rem",
+                          fontSize: "0.85rem",
+                        }}
+                      >
+                        Add design
+                      </button>
+                    </div>
+                    {designMarkupDrafts.length === 0 ? (
+                      <p style={{ fontSize: "0.8rem", opacity: 0.65, margin: 0 }}>
+                        No design overrides — all designs use overall markup.
+                      </p>
+                    ) : (
+                      <ul
+                        style={{
+                          listStyle: "none",
+                          margin: 0,
+                          padding: 0,
+                          display: "grid",
+                          gap: "0.65rem",
+                        }}
+                      >
+                        {designMarkupDrafts.map((row, index) => (
+                          <li
+                            key={`design-markup-${index}`}
+                            style={{
+                              display: "grid",
+                              gap: "0.5rem",
+                              gridTemplateColumns: "1fr",
+                              border: "1px solid #2a2f3a",
+                              borderRadius: 6,
+                              padding: "0.75rem",
+                            }}
+                          >
+                            <div>
+                              <label
+                                htmlFor={`design-no-${index}`}
+                                style={labelStyle}
+                              >
+                                Design no
+                              </label>
+                              <input
+                                id={`design-no-${index}`}
+                                value={row.designNo}
+                                onChange={(e) => {
+                                  const designNo = e.target.value;
+                                  setDesignMarkupDrafts((rows) =>
+                                    rows.map((r, i) =>
+                                      i === index ? { ...r, designNo } : r,
+                                    ),
+                                  );
+                                }}
+                                placeholder="e.g. DE-435"
+                                style={fieldStyle}
+                                autoComplete="off"
+                              />
+                            </div>
+                            <div>
+                              <label
+                                htmlFor={`design-mode-${index}`}
+                                style={labelStyle}
+                              >
+                                Mode
+                              </label>
+                              <select
+                                id={`design-mode-${index}`}
+                                value={row.markupMode}
+                                onChange={(e) => {
+                                  const markupMode = e.target.value as
+                                    | "none"
+                                    | "percent"
+                                    | "multiplier";
+                                  setDesignMarkupDrafts((rows) =>
+                                    rows.map((r, i) =>
+                                      i === index ? { ...r, markupMode } : r,
+                                    ),
+                                  );
+                                }}
+                                style={fieldStyle}
+                              >
+                                <option value="none">None</option>
+                                <option value="percent">Percent (+%)</option>
+                                <option value="multiplier">Multiplier (×)</option>
+                              </select>
+                            </div>
+                            {row.markupMode !== "none" ? (
+                              <div>
+                                <label
+                                  htmlFor={`design-value-${index}`}
+                                  style={labelStyle}
+                                >
+                                  Value
+                                </label>
+                                <input
+                                  id={`design-value-${index}`}
+                                  inputMode="decimal"
+                                  value={row.markupValue}
+                                  onChange={(e) => {
+                                    const markupValue = e.target.value;
+                                    setDesignMarkupDrafts((rows) =>
+                                      rows.map((r, i) =>
+                                        i === index ? { ...r, markupValue } : r,
+                                      ),
+                                    );
+                                  }}
+                                  style={fieldStyle}
+                                />
+                              </div>
+                            ) : null}
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() =>
+                                setDesignMarkupDrafts((rows) =>
+                                  rows.filter((_, i) => i !== index),
+                                )
+                              }
+                              style={{
+                                ...btnSecondary,
+                                background: "#2a1717",
+                                color: "#f0c0c0",
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
                 <button
                   type="button"
@@ -791,6 +1332,14 @@ export function ConnectDashboard() {
                   style={btnSecondary}
                 >
                   Save location
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={onSaveMarkup}
+                  style={btnSecondary}
+                >
+                  {busy ? "Saving…" : "Save markup"}
                 </button>
                 <button
                   type="button"

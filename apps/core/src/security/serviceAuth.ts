@@ -1,11 +1,15 @@
 /**
  * Service-to-service auth stubs (Django ↔ Channels).
  * MVP: shared bearer token. Later: HMAC / mTLS.
+ *
+ * Use optionalServerEnv — Next route handlers do not see repo-root `.env`
+ * via static `process.env.CHANNELS_SERVICE_TOKEN`.
  */
+import { optionalServerEnv } from "../config/serverEnv";
 
 export function getExpectedServiceToken(): string {
-  const token = process.env.CHANNELS_SERVICE_TOKEN;
-  if (!token || token.trim() === "") {
+  const token = optionalServerEnv("CHANNELS_SERVICE_TOKEN");
+  if (!token) {
     throw new Error("CHANNELS_SERVICE_TOKEN is not configured");
   }
   return token;

@@ -57,6 +57,8 @@ See `.env.example` for `DB_*` mirrors + comments.
 SQL stubs:
 - `apps/core/src/db/shared/000_role_grants.example.sql` — role + grants (ops)
 - `apps/core/src/db/shared/001_channels_schema.sql` — `CREATE SCHEMA` + shared tables
+- `apps/core/src/db/shared/002_connection_entitlements.sql` — customer_id + markup columns
+- `apps/core/src/db/shared/003_connection_design_markup.sql` — per-design markup overrides
 - `apps/shopify/src/db/001_shopify_tables.sql`
 - `apps/woocommerce/src/db/001_woocommerce_tables.sql`
 
@@ -154,6 +156,8 @@ Token paste remains under **Advanced**. Re-install updates the same connection c
 ```bash
 # Apply migrations (same DB as DevJewels)
 psql "$DATABASE_URL" -f apps/core/src/db/shared/001_channels_schema.sql
+psql "$DATABASE_URL" -f apps/core/src/db/shared/002_connection_entitlements.sql
+psql "$DATABASE_URL" -f apps/core/src/db/shared/003_connection_design_markup.sql
 psql "$DATABASE_URL" -f apps/shopify/src/db/001_shopify_tables.sql
 
 # Credentials in env (not SQL)
@@ -176,6 +180,6 @@ npm run selfcheck:product-sync -w @devjewels-channels/core
 ### Still out of scope
 
 - WooCommerce/Magento real adapters
-- Product images / rich description push (facade exposes `image_base_path` only — not uploaded to Shopify yet)
+- Product images: CDN thumbnail (+ Live when available) via `productCreateMedia`
 - Querying `public` / `diamond` / `b2c` SoT tables from Channels
 - Separate RDS or separate database name for Channels (MVP)

@@ -5,6 +5,7 @@
     "plugins": [{ "name": "next" }],
     "paths": {
       "@/*": ["./src/*"],
+      "@devjewels-channels/core/config/serverEnv": ["./src/config/serverEnv.ts"],
       "@devjewels-channels/core/security/vault": ["./src/security/vault.ts"],
       "@devjewels-channels/shopify": ["../shopify/src/index.ts"],
       "@devjewels-channels/shopify/auth": ["../shopify/src/auth.ts"],

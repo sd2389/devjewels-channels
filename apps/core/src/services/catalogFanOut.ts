@@ -6,6 +6,7 @@ import type {
   CatalogUpdatedEnvelope,
   PriceUpdatedEnvelope,
 } from "@/services/events";
+import { optionalServerEnv } from "@/config/serverEnv";
 import { listActiveConnectionsWithCustomer } from "@/services/connections";
 import { filterEntitledCustomerIds } from "@/services/entitlements";
 import { enqueueProductSync } from "@/services/queue";
@@ -14,7 +15,7 @@ import type { ProductSyncJob } from "@/workers/handlers";
 const FANOUT_MAX = 50;
 
 function skeletonEnabled(): boolean {
-  const raw = (process.env.CHANNELS_ENQUEUE_SKELETON_ON_UNMAPPED ?? "0")
+  const raw = (optionalServerEnv("CHANNELS_ENQUEUE_SKELETON_ON_UNMAPPED") ?? "0")
     .trim()
     .toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";

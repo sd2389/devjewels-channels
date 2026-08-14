@@ -32,15 +32,20 @@ const EMPTY_PERMS: ChannelPermissions = {
 const cache = new Map<number, { at: number; value: CustomerEntitlements }>();
 const CACHE_TTL_MS = 15_000;
 
-export function clearEntitlementCache(): void {
-  cache.clear();
+export function clearEntitlementCache(customerId?: number): void {
+  if (customerId == null) {
+    cache.clear();
+    return;
+  }
+  cache.delete(customerId);
 }
 
 export async function fetchCustomerEntitlements(
   customerId: number,
+  options: { fresh?: boolean } = {},
 ): Promise<CustomerEntitlements> {
   const cached = cache.get(customerId);
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+  if (!options.fresh && cached && Date.now() - cached.at < CACHE_TTL_MS) {
     return cached.value;
   }
   const value = await deverpClient.getEntitlements(customerId);
@@ -62,12 +67,13 @@ export function emptyEntitlements(customerId: number): CustomerEntitlements {
 
 export async function requireSyncableEntitlements(
   customerId: number | null | undefined,
+  options: { fresh?: boolean } = {},
 ): Promise<CustomerEntitlements | null> {
   if (customerId == null || !Number.isInteger(customerId) || customerId <= 0) {
     return null;
   }
   try {
-    const ent = await fetchCustomerEntitlements(customerId);
+    const ent = await fetchCustomerEntitlements(customerId, options);
     if (!ent.key_present || !ent.permissions.can_view_designs) {
       return null;
     }

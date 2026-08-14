@@ -142,8 +142,7 @@ async function main(): Promise<void> {
   const webhooks = createMemoryWebhookEventStore();
   setSyncLogStoreForTests(syncLogs);
   setWebhookEventStoreForTests(webhooks);
-  setConnectionStoreForTests(
-    createMemoryConnectionStore([
+  const connections = createMemoryConnectionStore([
       {
         id: CONN,
         platform: "SHOPIFY",
@@ -159,8 +158,8 @@ async function main(): Promise<void> {
         sync_products: true,
         sync_orders: true,
       },
-    ]),
-  );
+    ]);
+  setConnectionStoreForTests(connections);
   setShopifyMetaStoreForTests(
     createMemoryShopifyMetaStore({
       shops: [{ connection_id: CONN, shop_domain: "orders.myshopify.com" }],
@@ -318,7 +317,41 @@ async function main(): Promise<void> {
   }
   assertNoSecrets(JSON.stringify(noKeyLog));
 
-  // 7) reserve denied when qty 0 (409) — sanitized
+  // 7) full revoke disables order sync before any entitlement or reserve call
+  await connections.updateSyncFlags(CONN, {
+    syncInventory: false,
+    syncPrice: false,
+    syncProducts: false,
+    syncOrders: false,
+  });
+  const claimRevoked = await webhooks.claim({
+    connectionId: CONN,
+    platform: "SHOPIFY",
+    externalEventId: "evt-key-revoked",
+    topic: "orders/create",
+    payloadRef: rawBody,
+  });
+  reserveCalls = 0;
+  const revoked = await runOrderProcessingJob({
+    kind: "order.process",
+    connectionId: CONN,
+    platform: "SHOPIFY",
+    webhookEventId: claimRevoked.row.id,
+  });
+  if (revoked !== "SKIPPED" || reserveCalls !== 0) {
+    throw new Error("key-revoked connection must not reserve an order");
+  }
+  if (syncLogs.rows.at(-1)?.message !== "connection_orders_disabled") {
+    throw new Error("expected connection_orders_disabled after key revoke");
+  }
+  await connections.updateSyncFlags(CONN, {
+    syncInventory: true,
+    syncPrice: true,
+    syncProducts: true,
+    syncOrders: true,
+  });
+
+  // 8) reserve denied when qty 0 (409) — sanitized
   clearEntitlementCache();
   const claim409 = await webhooks.claim({
     connectionId: CONN,
@@ -354,7 +387,7 @@ async function main(): Promise<void> {
   }
   assertNoSecrets(JSON.stringify(deniedLog));
 
-  // 8) not entitled design → 400 from Customer API reserve
+  // 9) not entitled design → 400 from Customer API reserve
   clearEntitlementCache();
   const claim400 = await webhooks.claim({
     connectionId: CONN,
@@ -385,7 +418,7 @@ async function main(): Promise<void> {
   }
   assertNoSecrets(JSON.stringify(syncLogs.rows.at(-1)));
 
-  // 9) success path when can_place_orders=true
+  // 10) success path when can_place_orders=true
   clearEntitlementCache();
   const claimOk = await webhooks.claim({
     connectionId: CONN,

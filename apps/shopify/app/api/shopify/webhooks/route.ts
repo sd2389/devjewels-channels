@@ -5,4 +5,4 @@
 export {
   verifyShopifyWebhookHmac,
   parseShopifyWebhookTopic,
-} from "../../../../src/webhooks";
+} from "@devjewels-channels/shopify/webhooks";

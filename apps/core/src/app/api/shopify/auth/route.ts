@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
   }
   try {
     const { url } = await beginShopifyOAuthInstall(shop, customerId);
-    return NextResponse.redirect(url);
+    return NextResponse.redirect(url, 302);
   } catch (err) {
     if (err instanceof ShopifyOAuthConfigError) {
       return NextResponse.json({ error: err.message }, { status: 503 });

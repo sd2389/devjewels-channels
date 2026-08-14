@@ -18,6 +18,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "selfcheck:inventory": "npx --yes tsx src/inventory.selfcheck.ts",
     "selfcheck:catalog-orders": "npx --yes tsx src/catalogOrders.selfcheck.ts",
+    "selfcheck:job-details": "npx --yes tsx src/jobDetails.selfcheck.ts",
     "selfcheck:oauth": "npx --yes tsx src/oauth.selfcheck.ts"
   },
   "dependencies": {

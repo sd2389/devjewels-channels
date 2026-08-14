@@ -3,6 +3,7 @@
  * Never log access tokens.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { optionalProcessEnv } from "@devjewels-channels/core/config/serverEnv";
 import {
   tryReadVaultSecret,
   writeVaultSecret,
@@ -61,9 +62,9 @@ export function assertMyshopifyDomain(shop: string): string {
 }
 
 function resolveOAuthRedirectUri(): string {
-  const explicit = process.env.SHOPIFY_OAUTH_REDIRECT_URI?.trim();
+  const explicit = optionalProcessEnv("SHOPIFY_OAUTH_REDIRECT_URI");
   if (explicit) return explicit;
-  const base = process.env.CHANNELS_PUBLIC_BASE_URL?.trim();
+  const base = optionalProcessEnv("CHANNELS_PUBLIC_BASE_URL");
   if (base) {
     return `${base.replace(/\/$/, "")}/api/shopify/auth/callback`;
   }
@@ -100,11 +101,11 @@ async function readVaultOAuthAppCredentials(): Promise<{
 export async function getShopifyOAuthConfig(): Promise<ShopifyOAuthConfig> {
   const fromVault = await readVaultOAuthAppCredentials();
   const apiKey =
-    fromVault?.apiKey || process.env.SHOPIFY_API_KEY?.trim() || "";
+    fromVault?.apiKey || optionalProcessEnv("SHOPIFY_API_KEY") || "";
   const apiSecret =
-    fromVault?.apiSecret || process.env.SHOPIFY_API_SECRET?.trim() || "";
+    fromVault?.apiSecret || optionalProcessEnv("SHOPIFY_API_SECRET") || "";
   const scopes =
-    process.env.SHOPIFY_SCOPES?.trim() || DEFAULT_SHOPIFY_SCOPES;
+    optionalProcessEnv("SHOPIFY_SCOPES") || DEFAULT_SHOPIFY_SCOPES;
   const redirectUri = resolveOAuthRedirectUri();
 
   if (!apiKey || !apiSecret) {
@@ -179,9 +180,9 @@ export async function saveShopifyOAuthAppCredentials(input: {
 
 /** Public base for webhook callback URLs. */
 export function channelsPublicBaseUrl(): string {
-  const explicit = process.env.CHANNELS_PUBLIC_BASE_URL?.trim();
+  const explicit = optionalProcessEnv("CHANNELS_PUBLIC_BASE_URL");
   if (explicit) return explicit.replace(/\/$/, "");
-  const redirect = process.env.SHOPIFY_OAUTH_REDIRECT_URI?.trim();
+  const redirect = optionalProcessEnv("SHOPIFY_OAUTH_REDIRECT_URI");
   if (redirect) {
     return redirect.replace(/\/api\/shopify\/auth\/callback\/?$/i, "").replace(/\/$/, "");
   }

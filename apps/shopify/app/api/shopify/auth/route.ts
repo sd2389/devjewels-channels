@@ -10,4 +10,4 @@ export {
   exchangeShopifyOAuthCode,
   getShopifyOAuthConfig,
   ShopifyOAuthConfigError,
-} from "../../../../src/auth";
+} from "@devjewels-channels/shopify/auth";

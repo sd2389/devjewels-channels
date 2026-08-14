@@ -40,11 +40,17 @@ export async function claimEventId(
       }
       return { duplicate: false, store: "db" };
     } catch (err) {
-      // Schema not applied yet — fall back to memory (shared DB still required for prod).
+      if (process.env.NODE_ENV === "production") {
+        throw new Error("Persistent ingest idempotency is unavailable");
+      }
+      // Local scaffold only: schema may not be applied yet.
       console.warn("ingest_event_db_unavailable", {
         error_type: err instanceof Error ? err.name : "Error",
       });
     }
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("DATABASE_URL is required for persistent ingest idempotency");
   }
 
   const now = Date.now();
@@ -54,6 +60,27 @@ export async function claimEventId(
   }
   memorySeen.set(eventId, now);
   return { duplicate: false, store: "memory" };
+}
+
+/**
+ * Release a failed claim so the same event_id can be retried safely.
+ * Successful claims remain durable and continue to deduplicate.
+ */
+export async function releaseEventId(eventId: string): Promise<void> {
+  const db = tryGetChannelsDb();
+  if (db) {
+    try {
+      await db.query(
+        `DELETE FROM ${CHANNELS_SCHEMA}.ingest_event WHERE event_id = $1`,
+        [eventId],
+      );
+    } catch (err) {
+      console.warn("ingest_event_release_db_unavailable", {
+        error_type: err instanceof Error ? err.name : "Error",
+      });
+    }
+  }
+  memorySeen.delete(eventId);
 }
 
 /** Test helper. */

@@ -64,7 +64,13 @@ async function main(): Promise<void> {
                 userErrors: [],
               },
               productVariantsBulkCreate: {
-                productVariants: [],
+                productVariants: [
+                  {
+                    id: "gid://shopify/ProductVariant/9",
+                    sku: "JOB-A",
+                    inventoryItem: { id: "gid://shopify/InventoryItem/9" },
+                  },
+                ],
                 userErrors: [],
               },
             },
@@ -111,7 +117,7 @@ async function main(): Promise<void> {
   if (created.variants[0]?.externalInventoryItemId !== "gid://shopify/InventoryItem/9") {
     throw new Error("inventory item id mismatch");
   }
-  if (calls.length !== 1) throw new Error("expected one graphql call");
+  if (calls.length !== 2) throw new Error("expected create + variant graphql calls");
 
   const { updateShopifyProduct } = await import("./products");
   const updated = await updateShopifyProduct(client, {
@@ -131,7 +137,7 @@ async function main(): Promise<void> {
   if (updated.externalProductId !== "gid://shopify/Product/9") {
     throw new Error("update product id mismatch");
   }
-  if (calls.length < 2) throw new Error("expected productUpdate graphql calls");
+  if (calls.length < 4) throw new Error("expected productUpdate graphql calls");
 
   console.log("shopify catalogOrders.selfcheck ok");
 }

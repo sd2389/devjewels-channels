@@ -6,12 +6,16 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { channelsRepoRoot, optionalServerEnv } from "../config/serverEnv";
+
+export function resolveVaultRoot(): string {
+  const configured = optionalServerEnv("CHANNELS_VAULT_DIR");
+  if (configured) return path.resolve(configured);
+  return path.join(channelsRepoRoot(), ".data", "secrets");
+}
 
 function vaultRoot(): string {
-  const configured = process.env.CHANNELS_VAULT_DIR?.trim();
-  if (configured) return path.resolve(configured);
-  // Repo root when cwd is apps/core (Next) or monorepo root.
-  return path.resolve(process.cwd(), process.cwd().endsWith("apps/core") ? "../.." : ".", ".data/secrets");
+  return resolveVaultRoot();
 }
 
 function vaultPath(id: string): string {

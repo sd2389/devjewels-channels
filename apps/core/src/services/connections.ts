@@ -40,6 +40,7 @@ export type CreateConnectionInput = {
 export type ConnectionStore = {
   getById(id: string): Promise<ConnectionRow | null>;
   getByCustomerId(customerId: number): Promise<ConnectionRow | null>;
+  listByCustomerId(customerId: number, limit?: number): Promise<ConnectionRow[]>;
   list(limit?: number): Promise<ConnectionRow[]>;
   listActiveWithCustomer(limit?: number): Promise<ConnectionRow[]>;
   create(input: CreateConnectionInput): Promise<ConnectionRow>;
@@ -53,6 +54,7 @@ export type ConnectionStore = {
     credentialsSecretRef: string,
     flags?: Partial<{
       syncInventory: boolean;
+      syncPrice: boolean;
       syncProducts: boolean;
       syncOrders: boolean;
       isActive: boolean;
@@ -61,6 +63,15 @@ export type ConnectionStore = {
       markupMode: MarkupMode;
       markupValue: number;
     }>,
+  ): Promise<ConnectionRow | null>;
+  updateSyncFlags(
+    id: string,
+    flags: {
+      syncInventory: boolean;
+      syncPrice: boolean;
+      syncProducts: boolean;
+      syncOrders: boolean;
+    },
   ): Promise<ConnectionRow | null>;
 };
 
@@ -145,6 +156,21 @@ function pgStore(db: SqlClient): ConnectionStore {
       return row ? mapRow(row) : null;
     },
 
+    async listByCustomerId(customerId, limit = 100) {
+      const capped = Math.min(Math.max(limit, 1), 500);
+      const result = await db.query<DbConnectionRow>(
+        `SELECT ${SELECT_COLS}
+         FROM ${CHANNELS_SCHEMA}.connection
+         WHERE customer_id = $1
+         ORDER BY created_at ASC
+         LIMIT $2`,
+        [customerId, capped],
+      );
+      return result.rows
+        .map(mapRow)
+        .filter((row): row is ConnectionRow => row !== null);
+    },
+
     async list(limit = 100) {
       const capped = Math.min(Math.max(limit, 1), 500);
       const result = await db.query<DbConnectionRow>(
@@ -179,12 +205,6 @@ function pgStore(db: SqlClient): ConnectionStore {
       const customerId = Number(input.customerId);
       if (!Number.isInteger(customerId) || customerId <= 0) {
         throw new Error("customer_id is required to create a channel connection");
-      }
-      const existing = await this.getByCustomerId(customerId);
-      if (existing) {
-        throw new Error(
-          `Customer ${customerId} already has a channel connection (${existing.id})`,
-        );
       }
       const result = await db.query<DbConnectionRow>(
         `INSERT INTO ${CHANNELS_SCHEMA}.connection
@@ -244,13 +264,14 @@ function pgStore(db: SqlClient): ConnectionStore {
         `UPDATE ${CHANNELS_SCHEMA}.connection
          SET credentials_secret_ref = $2,
              sync_inventory = COALESCE($3, sync_inventory),
-             sync_products = COALESCE($4, sync_products),
-             sync_orders = COALESCE($5, sync_orders),
-             is_active = COALESCE($6, is_active),
-             name = COALESCE($7, name),
-             customer_id = COALESCE($8, customer_id),
-             markup_mode = COALESCE($9, markup_mode),
-             markup_value = COALESCE($10, markup_value),
+             sync_price = COALESCE($4, sync_price),
+             sync_products = COALESCE($5, sync_products),
+             sync_orders = COALESCE($6, sync_orders),
+             is_active = COALESCE($7, is_active),
+             name = COALESCE($8, name),
+             customer_id = COALESCE($9, customer_id),
+             markup_mode = COALESCE($10, markup_mode),
+             markup_value = COALESCE($11, markup_value),
              updated_at = now()
          WHERE id = $1::uuid
          RETURNING ${SELECT_COLS}`,
@@ -258,6 +279,7 @@ function pgStore(db: SqlClient): ConnectionStore {
           id,
           credentialsSecretRef,
           flags?.syncInventory ?? null,
+          flags?.syncPrice ?? null,
           flags?.syncProducts ?? null,
           flags?.syncOrders ?? null,
           flags?.isActive ?? null,
@@ -265,6 +287,28 @@ function pgStore(db: SqlClient): ConnectionStore {
           flags?.customerId ?? null,
           flags?.markupMode ?? null,
           flags?.markupValue ?? null,
+        ],
+      );
+      const row = result.rows[0];
+      return row ? mapRow(row) : null;
+    },
+
+    async updateSyncFlags(id, flags) {
+      const result = await db.query<DbConnectionRow>(
+        `UPDATE ${CHANNELS_SCHEMA}.connection
+         SET sync_inventory = $2,
+             sync_price = $3,
+             sync_products = $4,
+             sync_orders = $5,
+             updated_at = now()
+         WHERE id = $1::uuid
+         RETURNING ${SELECT_COLS}`,
+        [
+          id,
+          flags.syncInventory,
+          flags.syncPrice,
+          flags.syncProducts,
+          flags.syncOrders,
         ],
       );
       const row = result.rows[0];
@@ -287,6 +331,11 @@ export function createMemoryConnectionStore(
         [...rows.values()].find((r) => r.customer_id === customerId) ?? null
       );
     },
+    async listByCustomerId(customerId, limit = 100) {
+      return [...rows.values()]
+        .filter((r) => r.customer_id === customerId)
+        .slice(0, limit);
+    },
     async list(limit = 100) {
       return [...rows.values()].slice(0, limit);
     },
@@ -299,13 +348,6 @@ export function createMemoryConnectionStore(
       const customerId = Number(input.customerId);
       if (!Number.isInteger(customerId) || customerId <= 0) {
         throw new Error("customer_id is required to create a channel connection");
-      }
-      for (const existing of rows.values()) {
-        if (existing.customer_id === customerId) {
-          throw new Error(
-            `Customer ${customerId} already has a channel connection (${existing.id})`,
-          );
-        }
       }
       const id = crypto.randomUUID();
       const row: ConnectionRow = {
@@ -351,6 +393,7 @@ export function createMemoryConnectionStore(
         ...existing,
         credentials_secret_ref: credentialsSecretRef,
         sync_inventory: flags?.syncInventory ?? existing.sync_inventory,
+        sync_price: flags?.syncPrice ?? existing.sync_price,
         sync_products: flags?.syncProducts ?? existing.sync_products,
         sync_orders: flags?.syncOrders ?? existing.sync_orders,
         is_active: flags?.isActive ?? existing.is_active,
@@ -358,6 +401,19 @@ export function createMemoryConnectionStore(
         customer_id: flags?.customerId ?? existing.customer_id,
         markup_mode: flags?.markupMode ?? existing.markup_mode,
         markup_value: flags?.markupValue ?? existing.markup_value,
+      };
+      rows.set(id, next);
+      return next;
+    },
+    async updateSyncFlags(id, flags) {
+      const existing = rows.get(id);
+      if (!existing) return null;
+      const next: ConnectionRow = {
+        ...existing,
+        sync_inventory: flags.syncInventory,
+        sync_price: flags.syncPrice,
+        sync_products: flags.syncProducts,
+        sync_orders: flags.syncOrders,
       };
       rows.set(id, next);
       return next;
@@ -388,6 +444,13 @@ export async function getConnectionByCustomerId(
   customerId: number,
 ): Promise<ConnectionRow | null> {
   return getConnectionStore().getByCustomerId(customerId);
+}
+
+export async function listConnectionsByCustomerId(
+  customerId: number,
+  limit?: number,
+): Promise<ConnectionRow[]> {
+  return getConnectionStore().listByCustomerId(customerId, limit);
 }
 
 export async function createConnection(
@@ -425,6 +488,7 @@ export async function updateConnectionCredentials(
   credentialsSecretRef: string,
   flags?: Partial<{
     syncInventory: boolean;
+    syncPrice: boolean;
     syncProducts: boolean;
     syncOrders: boolean;
     isActive: boolean;
@@ -435,4 +499,16 @@ export async function updateConnectionCredentials(
   }>,
 ): Promise<ConnectionRow | null> {
   return getConnectionStore().updateCredentials(id, credentialsSecretRef, flags);
+}
+
+export async function updateConnectionSyncFlags(
+  id: string,
+  flags: {
+    syncInventory: boolean;
+    syncPrice: boolean;
+    syncProducts: boolean;
+    syncOrders: boolean;
+  },
+): Promise<ConnectionRow | null> {
+  return getConnectionStore().updateSyncFlags(id, flags);
 }

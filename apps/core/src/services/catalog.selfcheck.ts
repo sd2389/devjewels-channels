@@ -20,6 +20,10 @@ import {
   setProductMappingStoreForTests,
 } from "./productMappings";
 import {
+  createMemoryConnectionDesignMarkupStore,
+  setConnectionDesignMarkupStoreForTests,
+} from "./connectionDesignMarkups";
+import {
   createMemorySyncLogStore,
   setSyncLogStoreForTests,
 } from "./syncLog";
@@ -29,6 +33,11 @@ import {
 } from "./variantMappings";
 import { setDeverpClientForTests, type DeverpClient } from "../integrations/deverp/client";
 import { runCatalogImport } from "./catalogImportService";
+import { clearEntitlementCache } from "./entitlements";
+import {
+  drainMemoryInventoryQueue,
+  peekMemoryInventoryQueueDepth,
+} from "./queue";
 import {
   createMemoryShopifyMetaStore,
   setShopifyMetaStoreForTests,
@@ -146,6 +155,8 @@ async function main(): Promise<void> {
     shopDomain: "catalog.myshopify.com",
     webhookSecret: "whsec_catalog",
   });
+  delete process.env.INVENTORY_SYNC_QUEUE_URL;
+  drainMemoryInventoryQueue();
 
   const syncLogs = createMemorySyncLogStore();
   const productMaps = createMemoryProductMappingStore();
@@ -156,6 +167,7 @@ async function main(): Promise<void> {
   setProductMappingStoreForTests(productMaps);
   setVariantMappingStoreForTests(variantMaps);
   setCatalogImportStoreForTests(imports);
+  setConnectionDesignMarkupStoreForTests(createMemoryConnectionDesignMarkupStore());
   setConnectionStoreForTests(createMemoryConnectionStore([baseConnection()]));
   setDeverpClientForTests(mockDeverp());
   setShopifyMetaStoreForTests(
@@ -179,6 +191,23 @@ async function main(): Promise<void> {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (_url, init) => {
     const body = typeof init?.body === "string" ? init.body : "";
+    // Media attach (must run before productCreate match — substring overlaps)
+    if (
+      body.includes("productMediaList") ||
+      body.includes("productCreateMedia") ||
+      body.includes("productDeleteMedia")
+    ) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            product: { id: "gid://shopify/Product/1", media: { nodes: [] } },
+            productCreateMedia: { media: [], mediaUserErrors: [] },
+            productDeleteMedia: { deletedMediaIds: [], mediaUserErrors: [] },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
     // productCreate GraphQL
     if (body.includes("productCreate")) {
       return new Response(
@@ -206,7 +235,7 @@ async function main(): Promise<void> {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
-    // productUpdate / variants bulk (re-import update path)
+    // productUpdate / variants bulk (create + re-import update)
     if (
       body.includes("productUpdate") ||
       body.includes("productVariantsBulkUpdate") ||
@@ -230,7 +259,13 @@ async function main(): Promise<void> {
               userErrors: [],
             },
             productVariantsBulkCreate: {
-              productVariants: [],
+              productVariants: [
+                {
+                  id: "gid://shopify/ProductVariant/11",
+                  sku: "JOB-1",
+                  inventoryItem: { id: "gid://shopify/InventoryItem/21" },
+                },
+              ],
               userErrors: [],
             },
           },
@@ -264,6 +299,19 @@ async function main(): Promise<void> {
     if (!variant?.external_inventory_item_id) {
       throw new Error("expected variant_mapping with inventory item id");
     }
+    if (peekMemoryInventoryQueueDepth() !== 1) {
+      throw new Error("catalog import must enqueue inventory for each mapped live job");
+    }
+    const firstInventoryJobs = drainMemoryInventoryQueue();
+    if (
+      firstInventoryJobs[0]?.designNo !== "DJ-1" ||
+      firstInventoryJobs[0]?.jobNo !== "JOB-1" ||
+      firstInventoryJobs[0]?.quantity !== 1
+    ) {
+      throw new Error(
+        `catalog import inventory job is wrong: ${JSON.stringify(firstInventoryJobs)}`,
+      );
+    }
 
     // Re-import must update existing mapping (not duplicate create).
     const result2 = await runCatalogImport({
@@ -278,6 +326,46 @@ async function main(): Promise<void> {
     if (!mapped2 || mapped2.external_product_id !== "gid://shopify/Product/1") {
       throw new Error("re-import should keep same product mapping");
     }
+    if (peekMemoryInventoryQueueDepth() !== 1) {
+      throw new Error("catalog re-import must refresh inventory for mapped live jobs");
+    }
+    drainMemoryInventoryQueue();
+
+    // Full API-key revoke must deny manual/backfill imports before Shopify work.
+    const revokedClient = mockDeverp();
+    revokedClient.getEntitlements = async () => ({
+      customer_id: 1,
+      key_present: false,
+      api_key_id: null,
+      permissions: {
+        can_view_designs: false,
+        can_view_inventory: false,
+        can_view_prices: false,
+        can_place_orders: false,
+      },
+      design_nos: [],
+      design_count: 0,
+      design_nos_truncated: false,
+    });
+    setDeverpClientForTests(revokedClient);
+    clearEntitlementCache();
+    let importDenied = false;
+    try {
+      await runCatalogImport({
+        connectionId: CONN,
+        concurrency: 2,
+        maxDesigns: 10,
+      });
+    } catch (err) {
+      importDenied =
+        err instanceof Error && err.message.includes("no active API key");
+    }
+    if (!importDenied) {
+      throw new Error("catalog import must be denied after API-key revoke");
+    }
+    if ((await productMaps.listByConnection(CONN)).length !== 1) {
+      throw new Error("denied import must not mutate existing mappings");
+    }
 
     const failedLogs = syncLogs.rows.filter((r) => r.status === "FAILED");
     if (failedLogs.length) {
@@ -290,10 +378,13 @@ async function main(): Promise<void> {
     setProductMappingStoreForTests(null);
     setVariantMappingStoreForTests(null);
     setSyncLogStoreForTests(null);
+    setConnectionDesignMarkupStoreForTests(null);
     setDeverpClientForTests(null);
     setShopifyMetaStoreForTests(null);
     resetAdaptersForTests();
     resetAdaptersReadyForTests();
+    drainMemoryInventoryQueue();
+    clearEntitlementCache();
   }
 
   // HMAC helper smoke (shared with orders selfcheck)

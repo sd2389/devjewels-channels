@@ -3,8 +3,9 @@
  * Hard rule: never SELECT/JOIN public SoT tables.
  */
 import { Pool, type QueryResultRow } from "pg";
+import { optionalServerEnv } from "../../config/serverEnv";
 
-export const CHANNELS_SCHEMA = process.env.CHANNELS_SCHEMA ?? "channels";
+export const CHANNELS_SCHEMA = optionalServerEnv("CHANNELS_SCHEMA") ?? "channels";
 
 export type SqlClient = {
   query: <T extends QueryResultRow = QueryResultRow>(
@@ -27,11 +28,7 @@ export function assertChannelsOnlySql(sql: string): void {
   }
 }
 
-function createPool(): Pool {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString || connectionString.trim() === "") {
-    throw new Error("DATABASE_URL is not configured (shared Dev Jewels Postgres)");
-  }
+function createPool(connectionString: string): Pool {
   return new Pool({
     connectionString,
     // Force session search_path so unqualified names stay in channels when used carefully.
@@ -42,16 +39,23 @@ function createPool(): Pool {
   });
 }
 
+function resolveDatabaseUrl(): string | undefined {
+  // Explicit empty disables DB (selfchecks). Do not fall through to .env.
+  if (process.env.DATABASE_URL === "") return undefined;
+  return optionalServerEnv("DATABASE_URL");
+}
+
 /**
  * Pooled client for schema `channels` on the shared Dev Jewels database.
  * Returns null when DATABASE_URL is unset (local Next-only without DB).
  */
 export function tryGetChannelsDb(): SqlClient | null {
-  if (!process.env.DATABASE_URL?.trim()) {
+  const connectionString = resolveDatabaseUrl();
+  if (!connectionString) {
     return null;
   }
   if (!pool) {
-    pool = createPool();
+    pool = createPool(connectionString);
   }
   const active = pool;
   return {

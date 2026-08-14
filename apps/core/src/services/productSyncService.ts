@@ -2,6 +2,7 @@
  * Per-design product sync: create/update when entitled; delete when revoked.
  * Pulls title/price/jobs from Django channels_api facades (customer-scoped).
  */
+import { registerDefaultAdapters } from "@/channels/registerAdapters";
 import { AdapterRouter } from "@/channels/router";
 import {
   InventorySkipError,
@@ -13,7 +14,11 @@ import {
   designInFeed,
   requireSyncableEntitlements,
 } from "@/services/entitlements";
-import { applyConnectionMarkup } from "@/services/markup";
+import { resolveChannelVariantPrice } from "@/services/channelUnitPrice";
+import { getDesignMarkup } from "@/services/connectionDesignMarkups";
+import { resolveDesignImageUrls } from "@/services/designImageUrls";
+import { resolveDesignShopifyTaxonomy } from "@/services/designShopifyTaxonomy";
+import { detailsFromInventoryJob } from "@/services/jobVariantDetails";
 import {
   getProductMappingStore,
   upsertProductMapping,
@@ -94,17 +99,7 @@ async function runProductDelete(
       credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
     });
     await mappingStore.deleteByDesign(job.connectionId, designNo);
-    // Best-effort: drop variant mappings for this design (SQL if available).
-    try {
-      const variantStore = getVariantMappingStore() as {
-        deleteByDesign?: (c: string, d: string) => Promise<unknown>;
-      };
-      if (typeof variantStore.deleteByDesign === "function") {
-        await variantStore.deleteByDesign(job.connectionId, designNo);
-      }
-    } catch {
-      // ignore — product mapping already removed
-    }
+    await getVariantMappingStore().deleteByDesign(job.connectionId, designNo);
     await writeSyncLog({
       connectionId: job.connectionId,
       platform: job.platform,
@@ -144,6 +139,7 @@ async function runProductDelete(
 export async function runProductSyncJob(
   job: ProductSyncJob,
 ): Promise<ProductSyncOutcome> {
+  registerDefaultAdapters();
   if (job.connectionId === "_skeleton") {
     console.info("product_sync_skeleton_skip", { designNo: job.designNo });
     await writeSyncLog({
@@ -186,7 +182,9 @@ export async function runProductSyncJob(
     return "SKIPPED";
   }
 
-  const entitlements = await requireSyncableEntitlements(connection.customer_id);
+  const entitlements = await requireSyncableEntitlements(connection.customer_id, {
+    fresh: true,
+  });
   if (!entitlements) {
     await writeSyncLog({
       connectionId: job.connectionId,
@@ -234,10 +232,30 @@ export async function runProductSyncJob(
 
   let title = designNo;
   let defaultPrice = 0;
+  let imageUrls: string[] = [];
+  let productType: string | undefined;
+  let tags: string[] = [];
+  let category = "";
   try {
     const product = await deverpClient.getProduct(designNo, connection.customer_id!);
     title = String(product.titleline || designNo).trim() || designNo;
     defaultPrice = parsePrice(product.totamt);
+    imageUrls = resolveDesignImageUrls({
+      designNo,
+      imageUrls: product.image_urls,
+      thumbnailUrl: product.thumbnail_url,
+      imageBasePath: product.image_base_path,
+      defaultColor: product.default_color,
+    });
+    const taxonomy = resolveDesignShopifyTaxonomy({
+      category: product.category,
+      collection: product.collection,
+      subcategory: product.subcategory,
+      producttype: product.producttype,
+    });
+    productType = taxonomy.productType;
+    tags = taxonomy.tags;
+    category = String(product.category || productType || "").trim();
   } catch (err) {
     await writeSyncLog({
       connectionId: job.connectionId,
@@ -262,34 +280,34 @@ export async function runProductSyncJob(
     jobs.push({ job_no: designNo, totamt: defaultPrice });
   }
 
+  const designOverrideRow = await getDesignMarkup(job.connectionId, designNo);
+  const designMarkup = designOverrideRow
+    ? {
+        markupMode: designOverrideRow.markup_mode,
+        markupValue: designOverrideRow.markup_value,
+      }
+    : null;
+
   const variants = [];
   for (const j of jobs) {
     const jobNo = String(j.job_no).trim();
-    let unitPrice = parsePrice(j.totamt ?? defaultPrice);
-    if (canViewPrices && connection.customer_id != null) {
-      try {
-        const priced = await deverpClient.getPrice({
-          customerId: connection.customer_id,
-          designNo,
-          jobNo: jobNo === designNo ? undefined : jobNo,
-        });
-        unitPrice = parsePrice(priced.final_price);
-      } catch {
-        // fall back to inventory/design totamt
-      }
-    } else if (!canViewPrices) {
-      unitPrice = 0;
-    }
-    unitPrice = applyConnectionMarkup(unitPrice, {
+    const unitPrice = await resolveChannelVariantPrice({
+      customerId: connection.customer_id,
+      designNo,
+      jobNo,
+      fallbackPrice: parsePrice(j.totamt ?? defaultPrice),
+      canViewPrices,
       markupMode: connection.markup_mode,
       markupValue: connection.markup_value,
       markupBps: connection.markup_bps,
+      designMarkup,
     });
     variants.push({
       jobNo,
       sku: jobNo,
       price: unitPrice,
       quantity: canViewInventory && jobNo !== designNo ? 1 : 0,
+      details: detailsFromInventoryJob(j as Record<string, unknown>, category),
     });
   }
 
@@ -297,6 +315,27 @@ export async function runProductSyncJob(
   const existing = await mappingStore.getByDesign(job.connectionId, designNo);
   const variantStore = getVariantMappingStore();
   const adapter = AdapterRouter.get(job.platform);
+
+  // Close the fetch/prepare race: queued or in-flight jobs must re-check the
+  // live SoT immediately before any Shopify mutation.
+  const liveEntitlements = await requireSyncableEntitlements(
+    connection.customer_id,
+    { fresh: true },
+  );
+  if (!liveEntitlements || !designInFeed(liveEntitlements, designNo)) {
+    if (existing) {
+      return runProductDelete({ ...job, action: "delete" });
+    }
+    await writeSyncLog({
+      connectionId: job.connectionId,
+      platform: job.platform,
+      jobType: "product",
+      status: "SKIPPED",
+      designNo,
+      message: "entitlement_revoked_before_mutation",
+    });
+    return "SKIPPED";
+  }
 
   try {
     let outcome: ProductSyncOutcome;
@@ -329,6 +368,9 @@ export async function runProductSyncJob(
         title,
         credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
         externalProductId: existing.external_product_id,
+        imageUrls,
+        productType,
+        tags,
         variants,
         existingVariants,
       });
@@ -363,6 +405,9 @@ export async function runProductSyncJob(
         designNo,
         title,
         credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
+        imageUrls,
+        productType,
+        tags,
         variants,
       });
 

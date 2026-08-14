@@ -64,9 +64,22 @@ export async function runOrderProcessingJob(
       await store.markStatus(event.id, "failed");
       return "SKIPPED";
     }
+    if (!connection.is_active || !connection.sync_orders) {
+      await writeSyncLog({
+        connectionId: job.connectionId,
+        platform: job.platform,
+        jobType: "order",
+        status: "SKIPPED",
+        message: "connection_orders_disabled",
+      });
+      await store.markStatus(event.id, "failed");
+      return "SKIPPED";
+    }
 
     const { fetchCustomerEntitlements } = await import("@/services/entitlements");
-    const entitlements = await fetchCustomerEntitlements(connection.customer_id);
+    const entitlements = await fetchCustomerEntitlements(connection.customer_id, {
+      fresh: true,
+    });
     if (!entitlements.key_present || !entitlements.permissions.can_place_orders) {
       const gateMessage = !entitlements.key_present
         ? "no_active_api_key"

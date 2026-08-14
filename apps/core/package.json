@@ -5,6 +5,7 @@
   "exports": {
     "./channels/types": "./src/channels/types.ts",
     "./channels/router": "./src/channels/router.ts",
+    "./config/serverEnv": "./src/config/serverEnv.ts",
     "./security/vault": "./src/security/vault.ts"
   },
   "scripts": {
@@ -18,7 +19,13 @@
     "selfcheck:product-sync": "npx --yes tsx src/services/productSync.selfcheck.ts",
     "selfcheck:orders": "npx --yes tsx src/services/orders.selfcheck.ts",
     "selfcheck:connect": "npx --yes tsx src/services/connect.selfcheck.ts",
-    "selfcheck:vault": "npx --yes tsx src/security/vault.selfcheck.ts"
+    "selfcheck:customers": "npx --yes tsx src/integrations/deverp.customers.selfcheck.ts",
+    "selfcheck:vault": "npx --yes tsx src/security/vault.selfcheck.ts",
+    "selfcheck:shopify-auth-route": "npx --yes tsx src/app/api/shopify/auth/route.selfcheck.ts",
+    "selfcheck:shopify-install-nav": "npx --yes tsx \"src/app/(dashboard)/shopifyInstallNav.selfcheck.ts\"",
+    "selfcheck:shopify-compliance": "npx --yes tsx src/services/shopifyCompliance.selfcheck.ts",
+    "selfcheck:design-markup": "npx --yes tsx src/services/connectionDesignMarkups.selfcheck.ts",
+    "selfcheck:job-details": "npx --yes tsx src/services/jobVariantDetails.selfcheck.ts"
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "^3.787.0",

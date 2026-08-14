@@ -4,9 +4,9 @@ import path from "node:path";
 
 /**
  * Monorepo: `next dev` runs from apps/core, but shared secrets live in
- * repo-root `.env` (optional `.env.local` overrides). Load root first; Next
- * still loads apps/core/.env* afterward (existing process.env wins, so root
- * fills gaps only).
+ * repo-root `.env`. loadEnvConfig here helps next.config itself; route
+ * handlers still cannot see those keys (Next allowlists apps/core/.env*).
+ * Runtime reads go through `src/config/serverEnv.ts`.
  */
 const monorepoRoot = path.join(__dirname, "../..");
 loadEnvConfig(monorepoRoot);

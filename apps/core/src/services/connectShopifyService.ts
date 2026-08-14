@@ -12,6 +12,7 @@ import {
 } from "@/services/connections";
 import { runCatalogImport, type CatalogImportResult } from "@/services/catalogImportService";
 import { writeVaultSecret } from "@/security/vault";
+import { optionalProcessEnv } from "@/config/serverEnv";
 import { resolveShopifyCredentials } from "@/security/secrets";
 import {
   fetchShopifyLocations,
@@ -57,7 +58,7 @@ export type ConnectShopifyResult = {
 async function resolveWebhookSecret(explicit?: string): Promise<string | undefined> {
   const fromInput = explicit?.trim();
   if (fromInput) return fromInput;
-  const fromEnv = process.env.SHOPIFY_API_SECRET?.trim();
+  const fromEnv = optionalProcessEnv("SHOPIFY_API_SECRET");
   return fromEnv || undefined;
 }
 

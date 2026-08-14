@@ -1,0 +1,23 @@
+# Example Shopify app config for Public distribution (CLI / Dev Dashboard reference).
+# Copy values into your real shopify.app.toml or Partner UI. Do not commit secrets.
+
+name = "DevJewels Channels"
+client_id = "YOUR_CLIENT_ID"
+application_url = "https://YOUR_CHANNELS_HOST"
+embedded = false
+
+[access_scopes]
+scopes = "read_products,write_products,read_inventory,write_inventory,read_locations,read_orders"
+
+[auth]
+redirect_urls = [
+  "https://YOUR_CHANNELS_HOST/api/shopify/auth/callback",
+  "http://localhost:3100/api/shopify/auth/callback"
+]
+
+[webhooks]
+api_version = "2025-01"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+  uri = "https://YOUR_CHANNELS_HOST/api/shopify/webhooks"

@@ -1,10 +1,31 @@
 # Local Shopify OAuth
 
+## Many customers (required)
+
+Shopify **Custom distribution** = one store (or Plus multi-store under one org) + generate link per shop.  
+**Not** OK for DevJewels connecting many unrelated jewelers.
+
+**Public distribution** = many merchants. Install stays in Channels (customer + shop → Install Shopify).  
+You can keep the App Store listing **unlisted** (not searchable); App Store **review** is still required.
+
+Distribution is **locked after you choose it**. If this app is already **Custom**, create a **new** app with **Public** and paste the new Client ID/Secret into Channels (dashboard Save). Keep the Custom app only for one-off tests if needed.
+
+Full checklist: [`docs/MANY_CUSTOMERS_PUBLIC_APP.md`](docs/MANY_CUSTOMERS_PUBLIC_APP.md)  
+TOML example: [`shopify.app.toml.example`](shopify.app.toml.example)
+
+Public app checklist (Shopify):
+1. Dev Dashboard → **Create app** → **Public distribution** (do not pick Custom).
+2. Scopes: products, inventory, locations, orders (same as Channels).
+3. Redirect: `http://localhost:3100/api/shopify/auth/callback` (local) and your production/tunnel callback when live.
+4. Compliance webhooks → `https://<host>/api/shopify/webhooks` (`customers/data_request`, `customers/redact`, `shop/redact`).
+5. Complete listing + privacy policy + submit review; then unlisted if you want.
+6. Channels dashboard → Save new Client ID + Secret once.
+
 ## Preferred: dashboard (no .env)
 
 1. Open the Channels dashboard (`http://localhost:3100`).
 2. Paste Shopify Partner **Client ID** and **Client Secret** once → **Save**.
-3. Enter `customer_id` + `your-store.myshopify.com` → **Install Shopify** → approve → pick location.
+3. Select customer + `your-store.myshopify.com` → **Install Shopify** → approve → pick location.
 
 Credentials live in the vault (`.data/secrets/`, gitignored). Restart is **not** required after saving in the UI.
 

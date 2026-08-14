@@ -19,6 +19,7 @@ export type VariantMappingStore = {
     designNo: string,
     jobNo: string,
   ): Promise<VariantMappingRow | null>;
+  deleteByDesign(connectionId: string, designNo: string): Promise<number>;
   upsert(input: {
     connectionId: string;
     designNo: string;
@@ -52,6 +53,16 @@ function pgStore(db: SqlClient): VariantMappingStore {
         [connectionId, designNo, jobNo],
       );
       return result.rows[0] ?? null;
+    },
+
+    async deleteByDesign(connectionId, designNo) {
+      const result = await db.query(
+        `DELETE FROM ${CHANNELS_SCHEMA}.variant_mapping
+         WHERE connection_id = $1::uuid
+           AND upper(replace(design_no, ' ', '')) = upper(replace($2, ' ', ''))`,
+        [connectionId, designNo],
+      );
+      return result.rowCount ?? 0;
     },
 
     async upsert(input) {
@@ -103,6 +114,16 @@ export function createMemoryVariantMappingStore(
   return {
     async getByDesignJob(connectionId, designNo, jobNo) {
       return rows.get(key(connectionId, designNo, jobNo)) ?? null;
+    },
+    async deleteByDesign(connectionId, designNo) {
+      const prefix = `${connectionId}|${designNo.replace(/\s+/g, "").toUpperCase()}|`;
+      let deleted = 0;
+      for (const mappingKey of rows.keys()) {
+        if (mappingKey.startsWith(prefix) && rows.delete(mappingKey)) {
+          deleted += 1;
+        }
+      }
+      return deleted;
     },
     async upsert(input) {
       const k = key(input.connectionId, input.designNo, input.jobNo);

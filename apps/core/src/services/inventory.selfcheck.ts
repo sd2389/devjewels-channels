@@ -198,6 +198,43 @@ async function withMockFetch(
 function installShopifyProductFetch(): typeof fetch {
   return (async (_url, init) => {
     const body = typeof init?.body === "string" ? init.body : "";
+    if (body.includes("productVariantsBulkCreate")) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            productVariantsBulkCreate: {
+              productVariants: [
+                {
+                  id: "gid://shopify/ProductVariant/1",
+                  sku: "JOB-1",
+                  inventoryItem: {
+                    id: "gid://shopify/InventoryItem/1",
+                  },
+                },
+              ],
+              userErrors: [],
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    if (
+      body.includes("productMediaList") ||
+      body.includes("productCreateMedia") ||
+      body.includes("productDeleteMedia")
+    ) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            product: { id: "gid://shopify/Product/1", media: { nodes: [] } },
+            productCreateMedia: { media: [], mediaUserErrors: [] },
+            productDeleteMedia: { deletedMediaIds: [], mediaUserErrors: [] },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
     if (body.includes("productCreate")) {
       return new Response(
         JSON.stringify({

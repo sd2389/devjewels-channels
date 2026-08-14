@@ -15,6 +15,10 @@ import {
   setProductMappingStoreForTests,
 } from "./productMappings";
 import {
+  createMemoryConnectionDesignMarkupStore,
+  setConnectionDesignMarkupStoreForTests,
+} from "./connectionDesignMarkups";
+import {
   createMemorySyncLogStore,
   setSyncLogStoreForTests,
 } from "./syncLog";
@@ -24,10 +28,16 @@ import {
 } from "./variantMappings";
 import { setDeverpClientForTests, type DeverpClient } from "../integrations/deverp/client";
 import { runProductSyncJob } from "./productSyncService";
+import { runInventorySyncJob } from "./inventorySyncService";
 import { fanOutEntitlementChanged } from "./entitlementFanOut";
-import { clearEntitlementCache } from "./entitlements";
 import {
+  clearEntitlementCache,
+  fetchCustomerEntitlements,
+} from "./entitlements";
+import {
+  drainMemoryInventoryQueue,
   drainMemoryProductQueue,
+  peekMemoryInventoryQueueDepth,
   peekMemoryProductQueueDepth,
 } from "./queue";
 import { safeParseEventEnvelope, type EntitlementChangedEnvelope } from "./events";
@@ -38,6 +48,7 @@ import {
 import { resetAdaptersReadyForTests } from "../workers/handlers";
 
 const CONN_A = "55555555-5555-5555-5555-555555555555";
+const CONN_A2 = "77777777-7777-7777-7777-777777777777";
 const CONN_B = "66666666-6666-6666-6666-666666666666";
 
 function connectionA(overrides: Partial<ConnectionRow> = {}): ConnectionRow {
@@ -57,6 +68,14 @@ function connectionA(overrides: Partial<ConnectionRow> = {}): ConnectionRow {
     sync_orders: true,
     ...overrides,
   };
+}
+
+function connectionA2(): ConnectionRow {
+  return connectionA({
+    id: CONN_A2,
+    name: "product-sync-selfcheck-a2",
+    credentials_secret_ref: "env:CHANNELS_SECRET_product_sync_a2",
+  });
 }
 
 function connectionB(): ConnectionRow {
@@ -174,6 +193,27 @@ function installShopifyFetch(calls: string[]): typeof fetch {
   return (async (_url, init) => {
     const body = typeof init?.body === "string" ? init.body : "";
     calls.push(body);
+    const request = body
+      ? (JSON.parse(body) as {
+          variables?: { id?: string; input?: { id?: string } };
+        })
+      : {};
+    if (
+      body.includes("productMediaList") ||
+      body.includes("productCreateMedia") ||
+      body.includes("productDeleteMedia")
+    ) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            product: { id: "gid://shopify/Product/99", media: { nodes: [] } },
+            productCreateMedia: { media: [], mediaUserErrors: [] },
+            productDeleteMedia: { deletedMediaIds: [], mediaUserErrors: [] },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
     if (body.includes("productCreate")) {
       return new Response(
         JSON.stringify({
@@ -222,6 +262,26 @@ function installShopifyFetch(calls: string[]): typeof fetch {
               ],
               userErrors: [],
             },
+            productVariantsBulkCreate: {
+              productVariants: [
+                {
+                  id: "gid://shopify/ProductVariant/99",
+                  sku: "JOB-9",
+                  inventoryItem: { id: "gid://shopify/InventoryItem/99" },
+                },
+              ],
+              userErrors: [],
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    if (body.includes("productForDelete")) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            product: { id: request.variables?.id },
           },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
@@ -232,7 +292,7 @@ function installShopifyFetch(calls: string[]): typeof fetch {
         JSON.stringify({
           data: {
             productDelete: {
-              deletedProductId: "gid://shopify/Product/99",
+              deletedProductId: request.variables?.input?.id,
               userErrors: [],
             },
           },
@@ -253,6 +313,10 @@ async function main(): Promise<void> {
     accessToken: "shpat_PRODUCT_SYNC_B",
     shopDomain: "product-sync-b.myshopify.com",
   });
+  process.env.CHANNELS_SECRET_product_sync_a2 = JSON.stringify({
+    accessToken: "shpat_PRODUCT_SYNC_A2",
+    shopDomain: "product-sync-a2.myshopify.com",
+  });
   delete process.env.PRODUCT_SYNC_QUEUE_URL;
 
   const entState: EntState = {
@@ -271,12 +335,14 @@ async function main(): Promise<void> {
   setProductMappingStoreForTests(productMaps);
   setVariantMappingStoreForTests(variantMaps);
   setSyncLogStoreForTests(syncLogs);
+  setConnectionDesignMarkupStoreForTests(createMemoryConnectionDesignMarkupStore());
   setConnectionStoreForTests(connections);
   setDeverpClientForTests(mockDeverp(entState));
   setShopifyMetaStoreForTests(
     createMemoryShopifyMetaStore({
       shops: [
         { connection_id: CONN_A, shop_domain: "product-sync.myshopify.com" },
+        { connection_id: CONN_A2, shop_domain: "product-sync-a2.myshopify.com" },
         { connection_id: CONN_B, shop_domain: "product-sync-b.myshopify.com" },
       ],
       locations: [],
@@ -375,6 +441,20 @@ async function main(): Promise<void> {
       designNo: "PS-B1",
       externalProductId: "gid://shopify/Product/200",
     });
+    await variantMaps.upsert({
+      connectionId: CONN_A,
+      designNo: "PS-1",
+      jobNo: "JOB-9",
+      externalVariantId: "gid://shopify/ProductVariant/99",
+      externalInventoryItemId: "gid://shopify/InventoryItem/99",
+    });
+    await variantMaps.upsert({
+      connectionId: CONN_A,
+      designNo: "PS-2",
+      jobNo: "JOB-PS-2",
+      externalVariantId: "gid://shopify/ProductVariant/100",
+      externalInventoryItemId: "gid://shopify/InventoryItem/100",
+    });
 
     // --- grant → sync jobs for listed designs only (customer A) ---
     drainMemoryProductQueue();
@@ -411,8 +491,20 @@ async function main(): Promise<void> {
       throw new Error("outside-feed design must not create mapping");
     }
 
-    // --- revoke → delete jobs for listed designs only ---
+    // A personal revoke must not delete a design still present via another feed source.
+    entState.designNos = ["PS-1", "PS-2"];
     drainMemoryProductQueue();
+    const stillEntitled = await fanOutEntitlementChanged(
+      entitlementEvent("revoke", 7, ["PS-2"], "evt-revoke-still-entitled"),
+    );
+    if (stillEntitled.enqueued !== 0 || peekMemoryProductQueueDepth() !== 0) {
+      throw new Error("revoke must not delete a design still in the entitlement union");
+    }
+
+    // --- revoke → delete only the now-absent design ---
+    entState.designNos = ["PS-1"];
+    drainMemoryProductQueue();
+    drainMemoryInventoryQueue();
     const revoke = await fanOutEntitlementChanged(
       entitlementEvent("revoke", 7, ["PS-2"]),
     );
@@ -438,29 +530,149 @@ async function main(): Promise<void> {
     if (!(await productMaps.getByDesign(CONN_A, "PS-1"))) {
       throw new Error("PS-1 must remain after revoke of PS-2 only");
     }
+    if (await variantMaps.getByDesignJob(CONN_A, "PS-2", "JOB-PS-2")) {
+      throw new Error("PS-2 variant mappings must be cleared after revoke");
+    }
+    if (!(await variantMaps.getByDesignJob(CONN_A, "PS-1", "JOB-9"))) {
+      throw new Error("PS-1 variant mapping must remain after revoke of PS-2");
+    }
+    if (peekMemoryInventoryQueueDepth() !== 0) {
+      throw new Error("one-design revoke must not enqueue inventory zero for other designs");
+    }
     if (!(await productMaps.getByDesign(CONN_B, "PS-B1"))) {
       throw new Error("customer B mapping must be untouched by A's revoke");
     }
+    const revokeDeleteCall = calls.findLast((call) => call.includes("productDelete"));
+    if (!revokeDeleteCall?.includes("gid://shopify/Product/100")) {
+      throw new Error("revoke must delete only PS-2's mapped Shopify product");
+    }
+
+    // A Shopify deletion failure must retain both mappings for SQS retry.
+    await productMaps.upsert({
+      connectionId: CONN_A,
+      designNo: "PS-FAIL",
+      externalProductId: "gid://shopify/Product/500",
+    });
+    await variantMaps.upsert({
+      connectionId: CONN_A,
+      designNo: "PS-FAIL",
+      jobNo: "JOB-FAIL",
+      externalVariantId: "gid://shopify/ProductVariant/500",
+      externalInventoryItemId: "gid://shopify/InventoryItem/500",
+    });
+    const regularFetch = globalThis.fetch;
+    globalThis.fetch = (async (url, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      if (body.includes("productForDelete")) {
+        return new Response(
+          JSON.stringify({
+            data: { product: { id: "gid://shopify/Product/500" } },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (body.includes("productDelete")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              productDelete: {
+                deletedProductId: null,
+                userErrors: [{ message: "temporary deletion failure" }],
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return regularFetch(url, init);
+    }) as typeof fetch;
+    let deleteFailed = false;
+    try {
+      await runProductSyncJob({
+        kind: "product.sync",
+        connectionId: CONN_A,
+        platform: "SHOPIFY",
+        designNo: "PS-FAIL",
+        action: "delete",
+      });
+    } catch {
+      deleteFailed = true;
+    } finally {
+      globalThis.fetch = regularFetch;
+    }
+    if (!deleteFailed) {
+      throw new Error("Shopify deletion failure must be retryable");
+    }
+    if (
+      !(await productMaps.getByDesign(CONN_A, "PS-FAIL")) ||
+      !(await variantMaps.getByDesignJob(CONN_A, "PS-FAIL", "JOB-FAIL"))
+    ) {
+      throw new Error("failed deletion must retain product and variant mappings");
+    }
+    if (syncLogs.rows.at(-1)?.status !== "FAILED") {
+      throw new Error("failed Shopify deletion must record FAILED sync_log");
+    }
+    await runProductSyncJob({
+      kind: "product.sync",
+      connectionId: CONN_A,
+      platform: "SHOPIFY",
+      designNo: "PS-FAIL",
+      action: "delete",
+    });
+
+    // Simulate a separate worker with stale cache: fresh worker gates still deny.
+    entState.designNos = ["PS-1", "PS-RACE"];
+    entState.keyPresent = true;
+    clearEntitlementCache();
+    await fetchCustomerEntitlements(7);
+    entState.keyPresent = false;
+    entState.designNos = [];
+    const callsBeforeRace = calls.length;
+    const raceOutcome = await runProductSyncJob({
+      kind: "product.sync",
+      connectionId: CONN_A,
+      platform: "SHOPIFY",
+      designNo: "PS-RACE",
+      action: "sync",
+    });
+    if (raceOutcome !== "SKIPPED" || calls.length !== callsBeforeRace) {
+      throw new Error("stale entitlement cache must not permit Shopify mutation");
+    }
+    if (await productMaps.getByDesign(CONN_A, "PS-RACE")) {
+      throw new Error("revoked queued job must not recreate a mapping");
+    }
 
     // --- key_revoked → delete ALL mapped designs for customer A only ---
+    setConnectionStoreForTests(
+      createMemoryConnectionStore([connectionA(), connectionA2(), connectionB()]),
+    );
     await productMaps.upsert({
       connectionId: CONN_A,
       designNo: "PS-2",
       externalProductId: "gid://shopify/Product/100",
     });
+    await productMaps.upsert({
+      connectionId: CONN_A2,
+      designNo: "PS-A2",
+      externalProductId: "gid://shopify/Product/300",
+    });
     drainMemoryProductQueue();
     const keyRevoked = await fanOutEntitlementChanged(
       entitlementEvent("key_revoked", 7, []),
     );
-    if (keyRevoked.enqueued !== 2) {
+    if (keyRevoked.enqueued !== 3) {
       throw new Error(
-        `key_revoked expected 2 delete jobs (PS-1, PS-2), got ${keyRevoked.enqueued}`,
+        `key_revoked expected all three customer mappings, got ${keyRevoked.enqueued}`,
       );
     }
     const keyJobs = drainMemoryProductQueue();
     if (
-      keyJobs.length !== 2 ||
-      !keyJobs.every((j) => j.connectionId === CONN_A && j.action === "delete")
+      keyJobs.length !== 3 ||
+      !keyJobs.every(
+        (j) =>
+          (j.connectionId === CONN_A || j.connectionId === CONN_A2) &&
+          j.action === "delete",
+      )
     ) {
       throw new Error(`key_revoked jobs wrong: ${JSON.stringify(keyJobs)}`);
     }
@@ -474,8 +686,81 @@ async function main(): Promise<void> {
     if (aLeft.length !== 0) {
       throw new Error(`customer A mappings must be empty after key_revoked, got ${aLeft.length}`);
     }
+    if ((await productMaps.listByConnection(CONN_A2)).length !== 0) {
+      throw new Error("all shops for customer A must be empty after key_revoked");
+    }
     if (!(await productMaps.getByDesign(CONN_B, "PS-B1"))) {
       throw new Error("customer B must be untouched by A's key_revoked");
+    }
+    const disabled = await getConnectionById(CONN_A);
+    const disabledA2 = await getConnectionById(CONN_A2);
+    if (
+      !disabled ||
+      !disabledA2 ||
+      disabled.sync_products ||
+      disabled.sync_inventory ||
+      disabled.sync_price ||
+      disabled.sync_orders ||
+      disabledA2.sync_products ||
+      disabledA2.sync_inventory ||
+      disabledA2.sync_price ||
+      disabledA2.sync_orders
+    ) {
+      throw new Error("key_revoked must immediately disable every sync flag");
+    }
+    const callsBeforeRevokedJobs = calls.length;
+    const revokedProduct = await runProductSyncJob({
+      kind: "product.sync",
+      connectionId: CONN_A,
+      platform: "SHOPIFY",
+      designNo: "PS-RECREATE",
+      action: "sync",
+    });
+    const revokedInventory = await runInventorySyncJob({
+      kind: "inventory.sync",
+      connectionId: CONN_A,
+      platform: "SHOPIFY",
+      designNo: "PS-1",
+      jobNo: "JOB-9",
+      quantity: 1,
+    });
+    if (
+      revokedProduct !== "SKIPPED" ||
+      revokedInventory !== "SKIPPED" ||
+      calls.length !== callsBeforeRevokedJobs
+    ) {
+      throw new Error("queued product/inventory jobs must fail closed after key revoke");
+    }
+
+    // Explicit re-grant restores flags and backfills without duplicate mappings.
+    entState.keyPresent = true;
+    entState.canViewDesigns = true;
+    entState.canViewInventory = true;
+    entState.canPlaceOrders = true;
+    entState.designNos = ["PS-1"];
+    const regrant = await fanOutEntitlementChanged(
+      entitlementEvent("permissions_changed", 7, [], "evt-regrant"),
+    );
+    if (regrant.enqueued !== 2) {
+      throw new Error(`re-grant expected one backfill per shop, got ${regrant.enqueued}`);
+    }
+    const regrantJobs = drainMemoryProductQueue();
+    if (regrantJobs.length !== 2) {
+      throw new Error("re-grant must enqueue bounded backfill jobs for every shop");
+    }
+    for (const regrantJob of regrantJobs) {
+      if ((await runProductSyncJob(regrantJob)) !== "CREATED") {
+        throw new Error("re-grant backfill must recreate each deleted product");
+      }
+      if ((await runProductSyncJob(regrantJob)) !== "UPDATED") {
+        throw new Error("re-grant retry must update, not duplicate, each product");
+      }
+    }
+    if (
+      (await productMaps.listByConnection(CONN_A)).length !== 1 ||
+      (await productMaps.listByConnection(CONN_A2)).length !== 1
+    ) {
+      throw new Error("re-grant retry must preserve one mapping per design");
     }
 
     // --- permissions_changed → refresh sync flags from Customer API ---
@@ -566,11 +851,13 @@ async function main(): Promise<void> {
     setProductMappingStoreForTests(null);
     setVariantMappingStoreForTests(null);
     setSyncLogStoreForTests(null);
+    setConnectionDesignMarkupStoreForTests(null);
     setDeverpClientForTests(null);
     setShopifyMetaStoreForTests(null);
     resetAdaptersForTests();
     resetAdaptersReadyForTests();
     drainMemoryProductQueue();
+    drainMemoryInventoryQueue();
     clearEntitlementCache();
   }
 
