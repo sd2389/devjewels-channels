@@ -1,11 +1,8 @@
-# GitHub OIDC deploy role — production policy (from live inventory)
+# GitHub OIDC role — SST deploy (+ SNS notify)
 
-Account: `293522066543` · Region: `us-east-2`  
-App prefix: `devjewels-channels-production`
+Account: `293522066543` · Region: `us-east-2`
 
-Use this on the role named in GitHub secret `AWS_ROLE_NAME` (replace AdministratorAccess).
-
-## Trust policy
+## Trust
 
 ```json
 {
@@ -30,16 +27,14 @@ Use this on the role named in GitHub secret `AWS_ROLE_NAME` (replace Administrat
 }
 ```
 
-## Permissions policy
-
-Attach as an inline or managed policy (e.g. `devjewels-channels-github-oidc-deploy`).
+## Permissions (SST + SNS deploy notify)
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "SstStateAndAssets",
+      "Sid": "SstS3",
       "Effect": "Allow",
       "Action": [
         "s3:GetObject",
@@ -69,7 +64,7 @@ Attach as an inline or managed policy (e.g. `devjewels-channels-github-oidc-depl
       ]
     },
     {
-      "Sid": "SstBootstrapSsm",
+      "Sid": "SstSsm",
       "Effect": "Allow",
       "Action": [
         "ssm:GetParameter",
@@ -81,14 +76,10 @@ Attach as an inline or managed policy (e.g. `devjewels-channels-github-oidc-depl
         "ssm:RemoveTagsFromResource",
         "ssm:DescribeParameters"
       ],
-      "Resource": [
-        "arn:aws:ssm:us-east-2:293522066543:parameter/sst/bootstrap",
-        "arn:aws:ssm:us-east-2:293522066543:parameter/sst/passphrase/*",
-        "arn:aws:ssm:us-east-2:293522066543:parameter/sst/*"
-      ]
+      "Resource": "arn:aws:ssm:us-east-2:293522066543:parameter/sst/*"
     },
     {
-      "Sid": "CloudFormationStacks",
+      "Sid": "SstCloudFormation",
       "Effect": "Allow",
       "Action": [
         "cloudformation:CreateStack",
@@ -115,7 +106,7 @@ Attach as an inline or managed policy (e.g. `devjewels-channels-github-oidc-depl
       ]
     },
     {
-      "Sid": "LambdaFunctions",
+      "Sid": "SstLambda",
       "Effect": "Allow",
       "Action": [
         "lambda:CreateFunction",
@@ -135,32 +126,28 @@ Attach as an inline or managed policy (e.g. `devjewels-channels-github-oidc-depl
         "lambda:InvokeFunction",
         "lambda:TagResource",
         "lambda:UntagResource",
-        "lambda:ListTags",
-        "lambda:ListFunctions"
+        "lambda:ListTags"
       ],
       "Resource": [
-        "arn:aws:lambda:us-east-2:293522066543:function:devjewels-channels-production-http",
-        "arn:aws:lambda:us-east-2:293522066543:function:devjewels-channels-production-inventory-sync",
-        "arn:aws:lambda:us-east-2:293522066543:function:devjewels-channels-production-order-processing",
-        "arn:aws:lambda:us-east-2:293522066543:function:devjewels-channels-production-product-sync",
         "arn:aws:lambda:us-east-2:293522066543:function:devjewels-channels-production-*",
         "arn:aws:lambda:us-east-2:293522066543:function:devjewels-channels-*"
       ]
     },
     {
-      "Sid": "LambdaEventSourceMappings",
+      "Sid": "SstLambdaEventSourceAndList",
       "Effect": "Allow",
       "Action": [
         "lambda:CreateEventSourceMapping",
         "lambda:UpdateEventSourceMapping",
         "lambda:DeleteEventSourceMapping",
         "lambda:GetEventSourceMapping",
-        "lambda:ListEventSourceMappings"
+        "lambda:ListEventSourceMappings",
+        "lambda:ListFunctions"
       ],
       "Resource": "*"
     },
     {
-      "Sid": "SqsQueues",
+      "Sid": "SstSqs",
       "Effect": "Allow",
       "Action": [
         "sqs:CreateQueue",
@@ -176,20 +163,10 @@ Attach as an inline or managed policy (e.g. `devjewels-channels-github-oidc-depl
         "sqs:AddPermission",
         "sqs:RemovePermission"
       ],
-      "Resource": [
-        "arn:aws:sqs:us-east-2:293522066543:devjewels-channels-production-InventorySyncQueue-mwvsuehb",
-        "arn:aws:sqs:us-east-2:293522066543:devjewels-channels-production-InventorySyncDlqQueue-dwteshcz",
-        "arn:aws:sqs:us-east-2:293522066543:devjewels-channels-production-OrderProcessingQueue-bznfbhco",
-        "arn:aws:sqs:us-east-2:293522066543:devjewels-channels-production-OrderProcessingDlqQueue-renosumb",
-        "arn:aws:sqs:us-east-2:293522066543:devjewels-channels-production-ProductSyncQueue-hurncrms",
-        "arn:aws:sqs:us-east-2:293522066543:devjewels-channels-production-ProductSyncDlqQueue-snonnarn",
-        "arn:aws:sqs:us-east-2:293522066543:devjewels-channels-production-PriceSyncQueue-erzznazv",
-        "arn:aws:sqs:us-east-2:293522066543:devjewels-channels-production-PriceSyncDlqQueue-bmaocfcx",
-        "arn:aws:sqs:us-east-2:293522066543:devjewels-channels-production-*"
-      ]
+      "Resource": "arn:aws:sqs:us-east-2:293522066543:devjewels-channels-production-*"
     },
     {
-      "Sid": "ApiGatewayHttpApi",
+      "Sid": "SstApiGateway",
       "Effect": "Allow",
       "Action": [
         "apigateway:GET",
@@ -200,18 +177,14 @@ Attach as an inline or managed policy (e.g. `devjewels-channels-github-oidc-depl
       ],
       "Resource": [
         "arn:aws:apigateway:us-east-2::/apis",
-        "arn:aws:apigateway:us-east-2::/apis/avohgdev4b",
-        "arn:aws:apigateway:us-east-2::/apis/avohgdev4b/*",
         "arn:aws:apigateway:us-east-2::/apis/*",
         "arn:aws:apigateway:us-east-2::/domainnames",
-        "arn:aws:apigateway:us-east-2::/domainnames/channels.devjewels.com",
-        "arn:aws:apigateway:us-east-2::/domainnames/channels.devjewels.com/*",
         "arn:aws:apigateway:us-east-2::/domainnames/*",
         "arn:aws:apigateway:us-east-2::/tags/*"
       ]
     },
     {
-      "Sid": "AcmReadExistingCert",
+      "Sid": "SstAcmRead",
       "Effect": "Allow",
       "Action": [
         "acm:DescribeCertificate",
@@ -219,13 +192,10 @@ Attach as an inline or managed policy (e.g. `devjewels-channels-github-oidc-depl
         "acm:ListCertificates",
         "acm:ListTagsForCertificate"
       ],
-      "Resource": [
-        "arn:aws:acm:us-east-2:293522066543:certificate/4567d4ad-31bd-4981-8700-c4c960129db8",
-        "arn:aws:acm:us-east-2:293522066543:certificate/*"
-      ]
+      "Resource": "*"
     },
     {
-      "Sid": "CloudWatchLogs",
+      "Sid": "SstLogs",
       "Effect": "Allow",
       "Action": [
         "logs:CreateLogGroup",
@@ -243,16 +213,14 @@ Attach as an inline or managed policy (e.g. `devjewels-channels-github-oidc-depl
         "logs:UntagResource"
       ],
       "Resource": [
-        "arn:aws:logs:us-east-2:293522066543:log-group:/aws/lambda/devjewels-channels-production-*",
-        "arn:aws:logs:us-east-2:293522066543:log-group:/aws/lambda/devjewels-channels-production-*:*",
-        "arn:aws:logs:us-east-2:293522066543:log-group:/aws/vendedlogs/apis/devjewels-channels-production-*",
-        "arn:aws:logs:us-east-2:293522066543:log-group:/aws/vendedlogs/apis/devjewels-channels-production-*:*",
-        "arn:aws:logs:us-east-2:293522066543:log-group:/aws/lambda/*Channels*",
-        "arn:aws:logs:us-east-2:293522066543:log-group:/aws/lambda/*Channels*:*"
+        "arn:aws:logs:us-east-2:293522066543:log-group:/aws/lambda/devjewels-channels-*",
+        "arn:aws:logs:us-east-2:293522066543:log-group:/aws/lambda/devjewels-channels-*:*",
+        "arn:aws:logs:us-east-2:293522066543:log-group:/aws/vendedlogs/apis/devjewels-channels-*",
+        "arn:aws:logs:us-east-2:293522066543:log-group:/aws/vendedlogs/apis/devjewels-channels-*:*"
       ]
     },
     {
-      "Sid": "IamManageLambdaExecutionRoles",
+      "Sid": "SstIamRoles",
       "Effect": "Allow",
       "Action": [
         "iam:CreateRole",
@@ -270,20 +238,19 @@ Attach as an inline or managed policy (e.g. `devjewels-channels-github-oidc-depl
         "iam:ListRolePolicies",
         "iam:ListInstanceProfilesForRole",
         "iam:ListRoleTags",
+        "iam:ListRoles",
         "iam:PassRole"
       ],
       "Resource": [
-        "arn:aws:iam::293522066543:role/devjewels-channels-production-ChannelsHttpRole-mbfdwuau",
-        "arn:aws:iam::293522066543:role/devjewels-channels-production-*",
         "arn:aws:iam::293522066543:role/devjewels-channels-*",
-        "arn:aws:iam::293522066543:role/*ChannelsHttp*",
+        "arn:aws:iam::293522066543:role/*Channels*",
         "arn:aws:iam::293522066543:role/*InventorySync*",
         "arn:aws:iam::293522066543:role/*OrderProcessing*",
         "arn:aws:iam::293522066543:role/*ProductSync*"
       ]
     },
     {
-      "Sid": "IamPassRoleToLambdaOnly",
+      "Sid": "SstPassRoleLambda",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": [
@@ -300,13 +267,7 @@ Attach as an inline or managed policy (e.g. `devjewels-channels-github-oidc-depl
       }
     },
     {
-      "Sid": "IamListRolesForInventory",
-      "Effect": "Allow",
-      "Action": ["iam:ListRoles", "iam:GetRole"],
-      "Resource": "*"
-    },
-    {
-      "Sid": "VpcEniForLambdas",
+      "Sid": "SstVpcEni",
       "Effect": "Allow",
       "Action": [
         "ec2:CreateNetworkInterface",
@@ -332,32 +293,3 @@ Attach as an inline or managed policy (e.g. `devjewels-channels-github-oidc-depl
   ]
 }
 ```
-
-## Live resources this maps to
-
-| Type | Name / ID |
-|------|-----------|
-| Lambda | `devjewels-channels-production-http` |
-| Lambda | `devjewels-channels-production-inventory-sync` |
-| Lambda | `devjewels-channels-production-order-processing` |
-| Lambda | `devjewels-channels-production-product-sync` |
-| SQS | `…-InventorySyncQueue-mwvsuehb` (+ DLQ `…-dwteshcz`) |
-| SQS | `…-OrderProcessingQueue-bznfbhco` (+ DLQ `…-renosumb`) |
-| SQS | `…-ProductSyncQueue-hurncrms` (+ DLQ `…-snonnarn`) |
-| SQS | `…-PriceSyncQueue-erzznazv` (+ DLQ `…-bmaocfcx`) |
-| HTTP API | `avohgdev4b` (`…-ChannelsApiApi-xxafoekw`) |
-| Domain | `channels.devjewels.com` |
-| IAM | `…-ChannelsHttpRole-mbfdwuau` (+ subscriber roles) |
-| Logs | `/aws/lambda/…-ChannelsHttpFunction-emrnhcfo`, `/aws/vendedlogs/apis/…-ChannelsApi-xtdxhktu` |
-| S3 | `sst-state-vdxvusvewved`, `sst-asset-vdxvusvewved` |
-| SSM | `/sst/bootstrap`, `/sst/passphrase/*` |
-
-## Apply
-
-1. IAM → role used by `AWS_ROLE_NAME`
-2. Trust policy → paste trust JSON above (channels `@id` subject)
-3. Remove `AdministratorAccess`
-4. Add permissions policy JSON above
-5. Re-run **Deploy Channels** once to confirm
-
-If a deploy fails on `AccessDenied`, check the Action + Resource in the error and add only that ARN — do not re-attach admin.
