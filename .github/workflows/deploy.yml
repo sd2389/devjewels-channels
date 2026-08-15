@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  NODE_VERSION: "20"
+  NODE_VERSION: "24"
   SST_STAGE: production
 
 jobs:
@@ -30,6 +30,8 @@ jobs:
           env-slug: ${{ secrets.INFISICAL_ENV_SLUG }}
           export-type: "env"
           secret-path: "/"
+          # Must match Infisical OIDC Auth → Audiences exactly
+          oidc-audience: "https://github.com/sd2389"
 
       - name: Assert required Channels secrets
         run: |
