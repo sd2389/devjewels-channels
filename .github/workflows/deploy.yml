@@ -21,6 +21,19 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # Temporary: print GitHub OIDC claims so Infisical Subject/Audiences can be matched exactly
+      - name: Debug GitHub OIDC claims
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https%3A%2F%2Fgithub.com%2Fsd2389" \
+            | jq -r '.value')
+          echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | awk '{while(length($0)%4) $0=$0"="; print}' | base64 -d 2>/dev/null \
+            | jq '{sub, aud, iss, repository, ref, repository_owner}'
+          echo "---"
+          echo "Copy Infisical OIDC Subject EXACTLY from .sub above (or use repo:sd2389/devjewels-channels:*)"
+          echo "Copy Infisical Audiences EXACTLY from .aud above"
+
       - name: Fetch secrets from Infisical
         uses: Infisical/secrets-action@v1.0.9
         with:
@@ -30,7 +43,6 @@ jobs:
           env-slug: ${{ secrets.INFISICAL_ENV_SLUG }}
           export-type: "env"
           secret-path: "/"
-          # Must match Infisical OIDC Auth → Audiences exactly
           oidc-audience: "https://github.com/sd2389"
 
       - name: Assert required Channels secrets
