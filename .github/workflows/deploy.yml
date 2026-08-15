@@ -31,8 +31,9 @@ jobs:
           echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | awk '{while(length($0)%4) $0=$0"="; print}' | base64 -d 2>/dev/null \
             | jq '{sub, aud, iss, repository, ref, repository_owner}'
           echo "---"
-          echo "Copy Infisical OIDC Subject EXACTLY from .sub above (or use repo:sd2389/devjewels-channels:*)"
-          echo "Copy Infisical Audiences EXACTLY from .aud above"
+          echo "Infisical OIDC Subject must match .sub EXACTLY (GitHub now embeds @ownerId/@repoId)."
+          echo "Example: repo:sd2389@183234613/devjewels-channels@1333311273:ref:refs/heads/main"
+          echo "Or glob: repo:sd2389@*/devjewels-channels@*:ref:refs/heads/main"
 
       - name: Fetch secrets from Infisical
         uses: Infisical/secrets-action@v1.0.9
@@ -87,6 +88,120 @@ jobs:
         env:
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: npx sst deploy --stage production
+
+      - name: Inventory created AWS resources (for IAM policy)
+        if: success()
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          NAME_PREFIX: devjewels-channels
+        run: |
+          set -euo pipefail
+          REGION="${AWS_REGION}"
+          PREFIX="${NAME_PREFIX}"
+          ACCOUNT="${AWS_ACCOUNT_ID}"
+
+          echo "=============================================="
+          echo "Channels deploy inventory — use these names/ARNs"
+          echo "to tighten the GitHub OIDC IAM role policy."
+          echo "prefix=${PREFIX}  region=${REGION}  account=${ACCOUNT}"
+          echo "=============================================="
+
+          echo ""
+          echo "### CloudFormation stacks"
+          aws cloudformation list-stacks \
+            --region "$REGION" \
+            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE \
+            --query "StackSummaries[?contains(StackName, \`${PREFIX}\`) || starts_with(StackName, \`SST\`)].{Name:StackName,Status:StackStatus}" \
+            --output table || true
+
+          echo ""
+          echo "### Lambda functions"
+          aws lambda list-functions \
+            --region "$REGION" \
+            --query "Functions[?contains(FunctionName, \`${PREFIX}\`) || contains(FunctionName, \`Channels\`)].{Name:FunctionName,Arn:FunctionArn,Runtime:Runtime}" \
+            --output table || true
+
+          echo ""
+          echo "### Lambda function ARNs (copy for policy)"
+          aws lambda list-functions \
+            --region "$REGION" \
+            --query "Functions[?contains(FunctionName, \`${PREFIX}\`) || contains(FunctionName, \`Channels\`)].FunctionArn" \
+            --output text | tr '\t' '\n' || true
+
+          echo ""
+          echo "### SQS queues"
+          aws sqs list-queues \
+            --region "$REGION" \
+            --queue-name-prefix "$PREFIX" \
+            --output table || true
+          # SST may prefix differently — also filter all URLs
+          aws sqs list-queues --region "$REGION" --output json \
+            | jq -r --arg p "$PREFIX" '.QueueUrls[]? | select(contains($p) or contains("Inventory") or contains("Order") or contains("Product") or contains("Price"))' \
+            || true
+
+          echo ""
+          echo "### API Gateway HTTP APIs"
+          aws apigatewayv2 get-apis \
+            --region "$REGION" \
+            --query "Items[?contains(Name, \`${PREFIX}\`) || contains(Name, \`Channels\`)].{Name:Name,ApiId:ApiId,Endpoint:ApiEndpoint}" \
+            --output table || true
+
+          echo ""
+          echo "### API Gateway custom domains"
+          aws apigatewayv2 get-domain-names \
+            --region "$REGION" \
+            --query "Items[].{Domain:DomainName,Arn:DomainNameArn}" \
+            --output table || true
+
+          echo ""
+          echo "### IAM roles (Lambda execution / SST)"
+          aws iam list-roles \
+            --query "Roles[?contains(RoleName, \`${PREFIX}\`) || contains(RoleName, \`Channels\`) || contains(RoleName, \`Inventory\`) || contains(RoleName, \`OrderProcessing\`) || contains(RoleName, \`ProductSync\`)].{Name:RoleName,Arn:Arn}" \
+            --output table || true
+
+          echo ""
+          echo "### IAM role ARNs (copy for policy)"
+          aws iam list-roles \
+            --query "Roles[?contains(RoleName, \`${PREFIX}\`) || contains(RoleName, \`Channels\`)].Arn" \
+            --output text | tr '\t' '\n' || true
+
+          echo ""
+          echo "### CloudWatch log groups"
+          aws logs describe-log-groups \
+            --region "$REGION" \
+            --log-group-name-prefix "/aws/lambda/${PREFIX}" \
+            --query "logGroups[].{Name:logGroupName,Arn:arn}" \
+            --output table || true
+          aws logs describe-log-groups \
+            --region "$REGION" \
+            --query "logGroups[?contains(logGroupName, \`${PREFIX}\`) || contains(logGroupName, \`Channels\`) || contains(logGroupName, \`API-Gateway\`)].logGroupName" \
+            --output text | tr '\t' '\n' || true
+
+          echo ""
+          echo "### SST bootstrap SSM params"
+          aws ssm get-parameters-by-path \
+            --region "$REGION" \
+            --path "/sst/" \
+            --recursive \
+            --query "Parameters[].Name" \
+            --output text 2>/dev/null | tr '\t' '\n' | head -50 || true
+
+          echo ""
+          echo "### SST / related S3 buckets"
+          aws s3api list-buckets \
+            --query "Buckets[?contains(Name, \`sst\`) || contains(Name, \`${PREFIX}\`)].Name" \
+            --output text | tr '\t' '\n' || true
+
+          echo ""
+          echo "### SST outputs (if available)"
+          npx sst output --stage production 2>/dev/null || npx sst version 2>/dev/null || true
+
+          echo ""
+          echo "=============================================="
+          echo "Done. Paste the ARNs above into docs/IAM_GITHUB_OIDC.md"
+          echo "and replace wildcards in the deploy role policy."
+          echo "=============================================="
 
       - name: Notify SNS on deploy failure
         if: failure()
