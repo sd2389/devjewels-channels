@@ -1,0 +1,99 @@
+name: Deploy Channels (SST)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  NODE_VERSION: "20"
+  SST_STAGE: production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Fetch secrets from Infisical
+        uses: Infisical/secrets-action@v1.0.9
+        with:
+          method: "oidc"
+          identity-id: ${{ secrets.INFISICAL_MACHINE_IDENTITY_ID }}
+          project-slug: ${{ secrets.INFISICAL_PROJECT_SLUG }}
+          env-slug: ${{ secrets.INFISICAL_ENV_SLUG }}
+          export-type: "env"
+          secret-path: "/"
+
+      - name: Assert required Channels secrets
+        run: |
+          set -euo pipefail
+          missing=0
+          for key in DATABASE_URL CHANNELS_SERVICE_TOKEN DEVJEWELS_API_BASE_URL AWS_SECURITY_GROUP_IDS; do
+            if [ -z "${!key:-}" ]; then
+              echo "Missing required Infisical secret: $key"
+              missing=1
+            fi
+          done
+          if [ -z "${AWS_SUBNET_IDS:-}${AWS_PRIVATE_SUBNET_IDS:-}" ]; then
+            echo "Missing required Infisical secret: AWS_SUBNET_IDS (or AWS_PRIVATE_SUBNET_IDS)"
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            echo "Add missing keys to the Channels Infisical project (production, path /)"
+            exit 1
+          fi
+          if [ -z "${CHANNELS_ENQUEUE_SKELETON_ON_UNMAPPED:-}" ]; then
+            echo "CHANNELS_ENQUEUE_SKELETON_ON_UNMAPPED=0" >> "$GITHUB_ENV"
+          fi
+          echo "Infisical secrets loaded for Channels production deploy"
+
+      - name: Configure AWS Credentials (GitHub OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ secrets.AWS_ROLE_NAME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Deploy with SST (production only)
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: npx sst deploy --stage production
+
+      - name: Notify SNS on deploy failure
+        if: failure()
+        env:
+          SNS_TOPIC: ${{ secrets.SNS_DEPLOY_TOPIC_ARN }}
+        run: |
+          TOPIC="${SNS_TOPIC:-arn:aws:sns:us-east-2:293522066543:Utilization-Alarms-topic}"
+          aws sns publish \
+            --topic-arn "$TOPIC" \
+            --subject "DevJewels Channels Deploy FAILED" \
+            --message "Channels SST production deploy failed for commit ${{ github.sha }} on branch ${{ github.ref_name }}. Check Actions: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --region ${{ secrets.AWS_REGION }}
+
+      - name: Notify SNS on deploy success
+        if: success()
+        env:
+          SNS_TOPIC: ${{ secrets.SNS_DEPLOY_TOPIC_ARN }}
+        run: |
+          TOPIC="${SNS_TOPIC:-arn:aws:sns:us-east-2:293522066543:Utilization-Alarms-topic}"
+          aws sns publish \
+            --topic-arn "$TOPIC" \
+            --subject "DevJewels Channels Deploy SUCCESS" \
+            --message "Channels SST production deploy succeeded for commit ${{ github.sha }} on branch ${{ github.ref_name }}." \
+            --region ${{ secrets.AWS_REGION }}

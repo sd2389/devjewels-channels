@@ -15,6 +15,8 @@ import {
 } from "./handlers";
 
 export { handler as inventorySyncHandler } from "./inventorySync";
+export { handler as orderProcessingHandler } from "./orderProcessing";
+export { handler as productSyncHandler } from "./productSync";
 
 export async function inventorySyncWorker(job: InventorySyncJob): Promise<void> {
   await handleInventorySync(job);

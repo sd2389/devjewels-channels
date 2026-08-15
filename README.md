@@ -96,6 +96,21 @@ npm run typecheck
 npm run sst:dev
 ```
 
+## AWS deploy (SST + GitHub OIDC + Infisical)
+
+Channels deploys as **API Gateway HTTP API + Lambda + SQS** (no CloudFront / no Next on AWS).
+
+- Workflow: [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) — same OIDC pattern as `devjewels-backend`
+- Secrets: dedicated Infisical project (path `/`, production) — see [docs/AWS_DEPLOY.md](./docs/AWS_DEPLOY.md)
+- Django: `CHANNELS_BASE_URL=<api-url>` → posts to `/api/internal/events`
+- Local UI only: `npm run dev` (Next dashboard). Production connect/OAuth uses HTTP APIs + `CHANNELS_OAUTH_SUCCESS_URL`.
+
+```bash
+git checkout -b feat/sst-aws-deploy-oidc
+npm run sst:deploy -- --stage production
+```
+
+
 Useful paths once running:
 - Dashboard shell: `GET /`
 - Event ingest: `POST /api/internal/events` (Bearer `CHANNELS_SERVICE_TOKEN`) — zod envelope, idempotent `event_id`, inventory fan-out → SQS or in-memory

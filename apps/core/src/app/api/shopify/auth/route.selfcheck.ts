@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { NextRequest } from "next/server";
 import {
   SHOPIFY_OAUTH_NOT_CONFIGURED_MESSAGE,
 } from "@devjewels-channels/shopify/auth";
@@ -19,13 +18,13 @@ async function jsonError(res: Response): Promise<string> {
 
 async function main(): Promise<void> {
   const missingShop = await GET(
-    new NextRequest("http://localhost:3100/api/shopify/auth?customer_id=1632"),
+    new Request("http://localhost:3100/api/shopify/auth?customer_id=1632"),
   );
   assert.equal(missingShop.status, 400);
   assert.match(await jsonError(missingShop), /Missing shop/i);
 
   const missingCustomer = await GET(
-    new NextRequest(
+    new Request(
       "http://localhost:3100/api/shopify/auth?shop=demo.myshopify.com",
     ),
   );
@@ -42,7 +41,7 @@ async function main(): Promise<void> {
 
   try {
     const missingCreds = await GET(
-      new NextRequest(
+      new Request(
         "http://localhost:3100/api/shopify/auth?shop=demo.myshopify.com&customer_id=1632",
       ),
     );

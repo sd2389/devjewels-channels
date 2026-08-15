@@ -9,8 +9,8 @@
     "dev": "npm run dev -w @devjewels-channels/core",
     "build": "npm run build -w @devjewels-channels/core",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "sst:dev": "sst dev",
-    "sst:deploy": "sst deploy"
+    "sst:dev": "sst dev --stage production",
+    "sst:deploy": "sst deploy --stage production"
   },
   "devDependencies": {
     "sst": "^3.17.10",
