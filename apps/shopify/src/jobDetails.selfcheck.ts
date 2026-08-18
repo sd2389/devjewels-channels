@@ -37,7 +37,7 @@ export function shopifyJobDetailsSelfcheck(): void {
   const sparse = variantMetafields("DJ-1", "J1", {});
   assert(sparse.length === 2, "sparse details → only job_no + design_no");
 
-  const html = jobDetailsDescriptionHtml("DJ-1", [
+  const html = jobDetailsDescriptionHtml("DJ-1<script>", [
     {
       jobNo: "18375",
       price: 100,
@@ -45,13 +45,31 @@ export function shopifyJobDetailsSelfcheck(): void {
       details: {
         store: "NEW YORK",
         metal: "GOLD",
+        purity: " ",
         gwt: "11.680 gms",
       },
     },
   ]);
-  assert(html?.includes("Job No: 18375"), "description includes job");
-  assert(html?.includes("Store: NEW YORK"), "description includes store");
-  assert(html?.includes("Gwt: 11.680 gms"), "description includes gwt");
+  assert(html?.includes("<h3>Design No: DJ-1&lt;script&gt;</h3>"), "design heading");
+  assert(
+    html?.includes("<strong>Job No:</strong> 18375"),
+    "job is a labelled field",
+  );
+  assert(
+    html?.includes("<strong>Store:</strong> NEW YORK"),
+    "store is a labelled field",
+  );
+  assert(
+    html?.includes("<strong>Gwt:</strong> 11.680 gms"),
+    "gwt field keeps unit",
+  );
+  assert(
+    html?.includes("<strong>Job No:</strong> 18375<br>"),
+    "fields are separated by line breaks",
+  );
+  assert(!html?.includes("<table"), "description must not use tables (theme-unsafe)");
+  assert(!html?.includes(" · "), "description must not use inline separators");
+  assert(!html?.includes("<strong>Purity:</strong>"), "empty fields must be omitted");
   assert(!html?.includes("<script"), "description must not allow raw tags from values");
 }
 

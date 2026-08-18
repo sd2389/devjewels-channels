@@ -85,7 +85,11 @@ function escapeHtml(raw: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/** Merchant-visible product description block (job detail lines). */
+/**
+ * Merchant- and storefront-visible product description block: one vertical
+ * paragraph per job. Uses `<p>/<br>/<strong>` because theme RTE styles
+ * (Dawn included) reflow or clip `<table>` inside the narrow product column.
+ */
 export function jobDetailsDescriptionHtml(
   designNo: string,
   variants: CreateProductInput["variants"],
@@ -93,23 +97,32 @@ export function jobDetailsDescriptionHtml(
   const rows = variants.slice(0, DESCRIPTION_JOB_CAP);
   if (!rows.length) return undefined;
   const lines: string[] = [
-    `<p><strong>Design No:</strong> ${escapeHtml(designNo)}</p>`,
+    `<h3>Design No: ${escapeHtml(designNo)}</h3>`,
   ];
   for (const v of rows) {
     const d = v.details || {};
-    const parts: string[] = [`Job No: ${escapeHtml(v.jobNo)}`];
-    if (d.store) parts.push(`Store: ${escapeHtml(d.store)}`);
-    if (d.category) parts.push(`Category: ${escapeHtml(d.category)}`);
-    if (d.metal) parts.push(`Metal: ${escapeHtml(d.metal)}`);
-    if (d.purity) parts.push(`Purity: ${escapeHtml(d.purity)}`);
-    if (d.color) parts.push(`Color: ${escapeHtml(d.color)}`);
-    if (d.diaQly) parts.push(`Dia. Qly: ${escapeHtml(d.diaQly)}`);
-    if (d.diaClr) parts.push(`Dia. Clr: ${escapeHtml(d.diaClr)}`);
-    if (d.size) parts.push(`Size: ${escapeHtml(d.size)}`);
-    if (d.gwt) parts.push(`Gwt: ${escapeHtml(d.gwt)}`);
-    if (d.nwt) parts.push(`Nwt: ${escapeHtml(d.nwt)}`);
-    if (d.dwt) parts.push(`Dwt: ${escapeHtml(d.dwt)}`);
-    lines.push(`<p>${parts.join(" · ")}</p>`);
+    const fields = [
+      ["Job No", v.jobNo],
+      ["Store", d.store],
+      ["Category", d.category],
+      ["Metal", d.metal],
+      ["Purity", d.purity],
+      ["Color", d.color],
+      ["Dia. Qly", d.diaQly],
+      ["Dia. Clr", d.diaClr],
+      ["Size", d.size],
+      ["Gwt", d.gwt],
+      ["Nwt", d.nwt],
+      ["Dwt", d.dwt],
+    ].filter((field): field is [string, string] => Boolean(field[1]?.trim()));
+    lines.push(
+      `<p>${fields
+        .map(
+          ([label, value]) =>
+            `<strong>${label}:</strong> ${escapeHtml(value.trim())}`,
+        )
+        .join("<br>\n")}</p>`,
+    );
   }
   if (variants.length > DESCRIPTION_JOB_CAP) {
     lines.push(
