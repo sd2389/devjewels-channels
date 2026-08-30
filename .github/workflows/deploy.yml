@@ -17,23 +17,12 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Configure this GitHub Environment with required reviewer approval.
+    # Production credentials should be scoped to this environment.
+    environment: production
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      # Temporary: print GitHub OIDC claims so Infisical Subject/Audiences can be matched exactly
-      - name: Debug GitHub OIDC claims
-        run: |
-          set -euo pipefail
-          TOKEN=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https%3A%2F%2Fgithub.com%2Fsd2389" \
-            | jq -r '.value')
-          echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | awk '{while(length($0)%4) $0=$0"="; print}' | base64 -d 2>/dev/null \
-            | jq '{sub, aud, iss, repository, ref, repository_owner}'
-          echo "---"
-          echo "Infisical OIDC Subject must match .sub EXACTLY (GitHub now embeds @ownerId/@repoId)."
-          echo "Example: repo:sd2389@183234613/devjewels-channels@1333311273:ref:refs/heads/main"
-          echo "Or glob: repo:sd2389@*/devjewels-channels@*:ref:refs/heads/main"
 
       - name: Fetch secrets from Infisical
         uses: Infisical/secrets-action@v1.0.9
@@ -47,27 +36,26 @@ jobs:
           oidc-audience: "https://github.com/sd2389"
 
       - name: Assert required Channels secrets
+        shell: bash
         run: |
           set -euo pipefail
           missing=0
           for key in DATABASE_URL CHANNELS_SERVICE_TOKEN DEVJEWELS_API_BASE_URL AWS_SECURITY_GROUP_IDS; do
             if [ -z "${!key:-}" ]; then
-              echo "Missing required Infisical secret: $key"
+              echo "Missing required production configuration: $key"
               missing=1
             fi
           done
           if [ -z "${AWS_SUBNET_IDS:-}${AWS_PRIVATE_SUBNET_IDS:-}" ]; then
-            echo "Missing required Infisical secret: AWS_SUBNET_IDS (or AWS_PRIVATE_SUBNET_IDS)"
+            echo "Missing required production subnet configuration"
             missing=1
           fi
           if [ "$missing" -ne 0 ]; then
-            echo "Add missing keys to the Channels Infisical project (production, path /)"
             exit 1
           fi
           if [ -z "${CHANNELS_ENQUEUE_SKELETON_ON_UNMAPPED:-}" ]; then
             echo "CHANNELS_ENQUEUE_SKELETON_ON_UNMAPPED=0" >> "$GITHUB_ENV"
           fi
-          echo "Infisical secrets loaded for Channels production deploy"
 
       - name: Configure AWS Credentials (GitHub OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -84,145 +72,47 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Deploy with SST (production only)
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Deploy with SST
         env:
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: npx sst deploy --stage production
-
-      - name: Inventory created AWS resources (for IAM policy)
-        if: success()
-        env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          NAME_PREFIX: devjewels-channels
-        run: |
-          set -euo pipefail
-          REGION="${AWS_REGION}"
-          PREFIX="${NAME_PREFIX}"
-          ACCOUNT="${AWS_ACCOUNT_ID}"
-
-          echo "=============================================="
-          echo "Channels deploy inventory — use these names/ARNs"
-          echo "to tighten the GitHub OIDC IAM role policy."
-          echo "prefix=${PREFIX}  region=${REGION}  account=${ACCOUNT}"
-          echo "=============================================="
-
-          echo ""
-          echo "### CloudFormation stacks"
-          aws cloudformation list-stacks \
-            --region "$REGION" \
-            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE \
-            --query "StackSummaries[?contains(StackName, \`${PREFIX}\`) || starts_with(StackName, \`SST\`)].{Name:StackName,Status:StackStatus}" \
-            --output table || true
-
-          echo ""
-          echo "### Lambda functions"
-          aws lambda list-functions \
-            --region "$REGION" \
-            --query "Functions[?contains(FunctionName, \`${PREFIX}\`) || contains(FunctionName, \`Channels\`)].{Name:FunctionName,Arn:FunctionArn,Runtime:Runtime}" \
-            --output table || true
-
-          echo ""
-          echo "### Lambda function ARNs (copy for policy)"
-          aws lambda list-functions \
-            --region "$REGION" \
-            --query "Functions[?contains(FunctionName, \`${PREFIX}\`) || contains(FunctionName, \`Channels\`)].FunctionArn" \
-            --output text | tr '\t' '\n' || true
-
-          echo ""
-          echo "### SQS queues"
-          aws sqs list-queues \
-            --region "$REGION" \
-            --queue-name-prefix "$PREFIX" \
-            --output table || true
-          # SST may prefix differently — also filter all URLs
-          aws sqs list-queues --region "$REGION" --output json \
-            | jq -r --arg p "$PREFIX" '.QueueUrls[]? | select(contains($p) or contains("Inventory") or contains("Order") or contains("Product") or contains("Price"))' \
-            || true
-
-          echo ""
-          echo "### API Gateway HTTP APIs"
-          aws apigatewayv2 get-apis \
-            --region "$REGION" \
-            --query "Items[?contains(Name, \`${PREFIX}\`) || contains(Name, \`Channels\`)].{Name:Name,ApiId:ApiId,Endpoint:ApiEndpoint}" \
-            --output table || true
-
-          echo ""
-          echo "### API Gateway custom domains"
-          aws apigatewayv2 get-domain-names \
-            --region "$REGION" \
-            --query "Items[].{Domain:DomainName,Arn:DomainNameArn}" \
-            --output table || true
-
-          echo ""
-          echo "### IAM roles (Lambda execution / SST)"
-          aws iam list-roles \
-            --query "Roles[?contains(RoleName, \`${PREFIX}\`) || contains(RoleName, \`Channels\`) || contains(RoleName, \`Inventory\`) || contains(RoleName, \`OrderProcessing\`) || contains(RoleName, \`ProductSync\`)].{Name:RoleName,Arn:Arn}" \
-            --output table || true
-
-          echo ""
-          echo "### IAM role ARNs (copy for policy)"
-          aws iam list-roles \
-            --query "Roles[?contains(RoleName, \`${PREFIX}\`) || contains(RoleName, \`Channels\`)].Arn" \
-            --output text | tr '\t' '\n' || true
-
-          echo ""
-          echo "### CloudWatch log groups"
-          aws logs describe-log-groups \
-            --region "$REGION" \
-            --log-group-name-prefix "/aws/lambda/${PREFIX}" \
-            --query "logGroups[].{Name:logGroupName,Arn:arn}" \
-            --output table || true
-          aws logs describe-log-groups \
-            --region "$REGION" \
-            --query "logGroups[?contains(logGroupName, \`${PREFIX}\`) || contains(logGroupName, \`Channels\`) || contains(logGroupName, \`API-Gateway\`)].logGroupName" \
-            --output text | tr '\t' '\n' || true
-
-          echo ""
-          echo "### SST bootstrap SSM params"
-          aws ssm get-parameters-by-path \
-            --region "$REGION" \
-            --path "/sst/" \
-            --recursive \
-            --query "Parameters[].Name" \
-            --output text 2>/dev/null | tr '\t' '\n' | head -50 || true
-
-          echo ""
-          echo "### SST / related S3 buckets"
-          aws s3api list-buckets \
-            --query "Buckets[?contains(Name, \`sst\`) || contains(Name, \`${PREFIX}\`)].Name" \
-            --output text | tr '\t' '\n' || true
-
-          echo ""
-          echo "### SST outputs (if available)"
-          npx sst output --stage production 2>/dev/null || npx sst version 2>/dev/null || true
-
-          echo ""
-          echo "=============================================="
-          echo "Done. Paste the ARNs above into docs/IAM_GITHUB_OIDC.md"
-          echo "and replace wildcards in the deploy role policy."
-          echo "=============================================="
 
       - name: Notify SNS on deploy failure
         if: failure()
         env:
           SNS_TOPIC: ${{ secrets.SNS_DEPLOY_TOPIC_ARN }}
+        shell: bash
         run: |
-          TOPIC="${SNS_TOPIC:-arn:aws:sns:us-east-2:293522066543:Utilization-Alarms-topic}"
+          set -euo pipefail
+          if [ -z "${SNS_TOPIC:-}" ]; then
+            echo "SNS deploy topic is not configured; skipping notification."
+            exit 0
+          fi
           aws sns publish \
-            --topic-arn "$TOPIC" \
+            --topic-arn "$SNS_TOPIC" \
             --subject "DevJewels Channels Deploy FAILED" \
-            --message "Channels SST production deploy failed for commit ${{ github.sha }} on branch ${{ github.ref_name }}. Check Actions: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --message "Channels production deploy failed for commit ${{ github.sha }} on branch ${{ github.ref_name }}. Check the GitHub Actions run for details." \
             --region ${{ secrets.AWS_REGION }}
 
       - name: Notify SNS on deploy success
         if: success()
         env:
           SNS_TOPIC: ${{ secrets.SNS_DEPLOY_TOPIC_ARN }}
+        shell: bash
         run: |
-          TOPIC="${SNS_TOPIC:-arn:aws:sns:us-east-2:293522066543:Utilization-Alarms-topic}"
+          set -euo pipefail
+          if [ -z "${SNS_TOPIC:-}" ]; then
+            echo "SNS deploy topic is not configured; skipping notification."
+            exit 0
+          fi
           aws sns publish \
-            --topic-arn "$TOPIC" \
+            --topic-arn "$SNS_TOPIC" \
             --subject "DevJewels Channels Deploy SUCCESS" \
-            --message "Channels SST production deploy succeeded for commit ${{ github.sha }} on branch ${{ github.ref_name }}." \
+            --message "Channels production deploy succeeded for commit ${{ github.sha }} on branch ${{ github.ref_name }}." \
             --region ${{ secrets.AWS_REGION }}
