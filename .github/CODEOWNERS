@@ -1,0 +1,10 @@
+# Default owner
+* @sd2389
+
+# Security- and integration-sensitive areas
+/.github/ @sd2389
+/apps/core/ @sd2389
+/apps/shopify/ @sd2389
+/sst.config.ts @sd2389
+/.env.example @sd2389
+/shopify.app.toml.example @sd2389
