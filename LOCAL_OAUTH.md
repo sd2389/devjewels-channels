@@ -55,6 +55,32 @@ Env fallback needs a process restart; vault does not.
 
 Use **Advanced: paste Admin API token**. That path does not need Client ID/Secret.
 
+## Shareable install links (staff → merchant)
+
+Staff on DevJewels **Admin → Channels** can generate a **signed one-time link** for a customer + shop. Send that URL to the merchant; they approve in Shopify and land on a merchant-safe confirmation page (`/connect/success`).
+
+1. DevJewels admin: select customer (must have active API key) + shop domain → **Copy install link**.
+2. Merchant opens the link → Channels verifies the token → Shopify OAuth → `/connect/success?connected=1`.
+3. Staff **Install Shopify** (same page, top-frame) still works for in-person installs and redirects to `CHANNELS_OAUTH_SUCCESS_URL` (DevJewels admin).
+
+Apply invite table migration once:
+
+```bash
+psql "$DATABASE_URL" -f apps/shopify/src/db/004_shopify_connect_invite.sql
+```
+
+Optional dedicated signing secret (defaults to `CHANNELS_SERVICE_TOKEN`):
+
+```bash
+CHANNELS_INVITE_SIGNING_SECRET=change-me-invite-only
+```
+
+Verify invite signing:
+
+```bash
+npm run selfcheck:invite -w @devjewels-channels/shopify
+```
+
 ## Verify
 
 ```bash

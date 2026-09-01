@@ -11,9 +11,11 @@ import {
   getAdminShopifyOauthConfig,
   postAdminConnectionById,
   postAdminConnectionsShopify,
+  postAdminShopifyInvites,
   postAdminShopifyOauthConfig,
   postWoocommerceWebhooks,
 } from "./routes/admin";
+import { getConnectShopify } from "./routes/shopifyConnect";
 import { json } from "./response";
 
 type RouteHandler = (req: Request, params: Record<string, string>) => Promise<Response>;
@@ -66,6 +68,10 @@ const routes: Array<{ pattern: string; handle: RouteHandler }> = [
     handle: async (req) => getShopifyAuthCallback(req),
   },
   {
+    pattern: "GET /api/connect/shopify",
+    handle: async (req) => getConnectShopify(req),
+  },
+  {
     pattern: "POST /api/woocommerce/webhooks",
     handle: async () => postWoocommerceWebhooks(),
   },
@@ -84,6 +90,10 @@ const routes: Array<{ pattern: string; handle: RouteHandler }> = [
   {
     pattern: "POST /api/admin/connections/shopify",
     handle: async (req) => postAdminConnectionsShopify(req),
+  },
+  {
+    pattern: "POST /api/admin/shopify-invites",
+    handle: async (req) => postAdminShopifyInvites(req),
   },
   {
     pattern: "GET /api/admin/shopify-oauth-config",

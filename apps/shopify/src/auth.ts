@@ -198,15 +198,18 @@ export function shopifyWebhookCallbackUrl(): string {
 /**
  * Persist CSRF state and return Shopify authorize URL.
  * customerId is embedded in state so callback can bind the connection.
+ * When merchantSuccess is true, state suffix `.m` routes callback to /connect/success.
  */
 export async function beginShopifyOAuthInstall(
   shop: string,
   customerId: number,
+  options: { merchantSuccess?: boolean } = {},
 ): Promise<{
   url: string;
   state: string;
   shopDomain: string;
   customerId: number;
+  merchantSuccess: boolean;
 }> {
   const config = await getShopifyOAuthConfig();
   const shopDomain = assertMyshopifyDomain(shop);
@@ -214,7 +217,8 @@ export async function beginShopifyOAuthInstall(
   if (!Number.isInteger(cid) || cid <= 0) {
     throw new Error("customer_id is required for Shopify OAuth install");
   }
-  const state = `${crypto.randomUUID()}.${cid}`;
+  const merchantSuccess = options.merchantSuccess === true;
+  const state = `${crypto.randomUUID()}.${cid}${merchantSuccess ? ".m" : ""}`;
   const expiresAt = new Date(Date.now() + STATE_TTL_MS);
   await getShopifyMetaStore().createOAuthState({
     shopDomain,
@@ -227,15 +231,23 @@ export async function beginShopifyOAuthInstall(
   url.searchParams.set("scope", config.scopes);
   url.searchParams.set("redirect_uri", config.redirectUri);
   url.searchParams.set("state", state);
-  return { url: url.toString(), state, shopDomain, customerId: cid };
+  return { url: url.toString(), state, shopDomain, customerId: cid, merchantSuccess };
 }
 
 export function parseCustomerIdFromOAuthState(state: string): number | null {
-  const parts = state.trim().split(".");
+  const trimmed = state.trim();
+  const withoutMerchant = trimmed.endsWith(".m")
+    ? trimmed.slice(0, -2)
+    : trimmed;
+  const parts = withoutMerchant.split(".");
   const raw = parts[parts.length - 1];
   const cid = Number(raw);
   if (!Number.isInteger(cid) || cid <= 0) return null;
   return cid;
+}
+
+export function isMerchantOAuthState(state: string): boolean {
+  return state.trim().endsWith(".m");
 }
 
 /** @deprecated prefer beginShopifyOAuthInstall (persists state). */
