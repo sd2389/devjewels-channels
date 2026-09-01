@@ -19,6 +19,8 @@ import {
 } from "@/services/connectionDesignMarkups";
 import { updateConnectionMarkup } from "@/services/connections";
 import type { MarkupMode } from "@/services/markup";
+import { createShopifyConnectInvite } from "@/services/shopifyInviteService";
+import { assertMyshopifyDomain } from "@devjewels-channels/shopify/auth";
 import { json } from "../response";
 
 const Q_MAX_LEN = 100;
@@ -87,6 +89,43 @@ export async function getAdminCustomers(req: Request): Promise<Response> {
     });
     return json(data);
   } catch (err) {
+    return jsonError(err);
+  }
+}
+
+export async function postAdminShopifyInvites(req: Request): Promise<Response> {
+  try {
+    await assertAdminRequest(req);
+    const body = (await req.json()) as {
+      customerId?: unknown;
+      shopDomain?: unknown;
+    };
+    const customerId = Number(body.customerId);
+    if (!Number.isInteger(customerId) || customerId <= 0) {
+      return json(
+        { error: "customer_id is required (DevJewels Customer.pk)" },
+        400,
+      );
+    }
+    let shopDomain: string;
+    try {
+      shopDomain = assertMyshopifyDomain(String(body.shopDomain || ""));
+    } catch {
+      return json({ error: "Shop must be a *.myshopify.com domain" }, 400);
+    }
+    const result = await createShopifyConnectInvite({ customerId, shopDomain });
+    return json(
+      {
+        inviteUrl: result.inviteUrl,
+        expiresAt: result.expiresAt,
+      },
+      201,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    if (/API key|can_view_designs/i.test(message)) {
+      return json({ error: message }, 400);
+    }
     return jsonError(err);
   }
 }

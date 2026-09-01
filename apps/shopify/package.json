@@ -8,6 +8,8 @@
     ".": "./src/index.ts",
     "./adapter": "./src/adapter.ts",
     "./auth": "./src/auth.ts",
+    "./shopifyInvite": "./src/shopifyInvite.ts",
+    "./inviteStore": "./src/inviteStore.ts",
     "./webhooks": "./src/webhooks.ts",
     "./products": "./src/products.ts",
     "./orders": "./src/orders.ts",
@@ -19,7 +21,8 @@
     "selfcheck:inventory": "npx --yes tsx src/inventory.selfcheck.ts",
     "selfcheck:catalog-orders": "npx --yes tsx src/catalogOrders.selfcheck.ts",
     "selfcheck:job-details": "npx --yes tsx src/jobDetails.selfcheck.ts",
-    "selfcheck:oauth": "npx --yes tsx src/oauth.selfcheck.ts"
+    "selfcheck:oauth": "npx --yes tsx src/oauth.selfcheck.ts",
+    "selfcheck:invite": "npx --yes tsx src/shopifyInvite.selfcheck.ts"
   },
   "dependencies": {
     "@devjewels-channels/core": "*"
