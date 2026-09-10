@@ -48,6 +48,7 @@ export function jsonError(err: unknown, fallbackStatus = 500): Response {
   const status =
     /not found/i.test(message) ? 404 :
     /already connected|required|must look|must be|no locations|inactive|invalid characters|too long/i.test(message) ? 400 :
+    /could not save vault secret/i.test(message) ? 503 :
     fallbackStatus;
   return Response.json({ error: message }, { status });
 }

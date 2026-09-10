@@ -128,7 +128,7 @@ npm run sst:deploy -- --stage production
 ## Gotchas that break prod
 
 1. **Workers need env** — shared Infisical env is passed into HTTP + SQS Lambdas.
-2. **File vault on Lambda** — `.data/secrets` does not persist; use Infisical `SHOPIFY_API_*`.
+2. **Vault on Lambda** — filesystem `.data/secrets` is read-only/ephemeral. Admin Save writes `channels.vault_secret` (apply `apps/core/src/db/shared/004_vault_secret.sql` if CREATE is not granted). `SHOPIFY_API_*` is env fallback only.
 3. **Private RDS without VPC** — set `AWS_SECURITY_GROUP_IDS` + `AWS_PRIVATE_SUBNET_IDS`.
 4. **Non-production stage** — rejected; only `--stage production`.
 5. **OIDC** — do not reuse backend ECR-only role (needs API Gateway + Lambda + SQS).

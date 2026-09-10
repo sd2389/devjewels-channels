@@ -175,7 +175,11 @@ export async function saveShopifyOAuthAppCredentials(input: {
     { apiKey: input.apiKey, apiSecret: input.apiSecret },
     SHOPIFY_OAUTH_APP_VAULT_ID,
   );
-  return getShopifyOAuthPublicStatus();
+  const status = await getShopifyOAuthPublicStatus();
+  console.info("shopify_oauth_app_saved", {
+    apiKeyLast4: status.apiKeyLast4,
+  });
+  return status;
 }
 
 /** Public base for webhook callback URLs. */

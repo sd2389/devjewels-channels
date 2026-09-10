@@ -153,6 +153,17 @@ async function main(): Promise<void> {
       err instanceof Error && /must be a single string/i.test(err.message);
   }
   if (!arrayRejected) throw new Error("expected array apiKey reject");
+  let emptySecretRejected = false;
+  try {
+    parseShopifyOAuthAppCredentials({
+      apiKey: "cid_test",
+      apiSecret: "",
+    });
+  } catch (err) {
+    emptySecretRejected =
+      err instanceof Error && /apiSecret is required/i.test(err.message);
+  }
+  if (!emptySecretRejected) throw new Error("expected empty apiSecret reject");
   let crlfRejected = false;
   try {
     parseShopifyOAuthAppCredentials({
