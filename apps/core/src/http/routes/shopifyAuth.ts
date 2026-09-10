@@ -38,6 +38,9 @@ export async function getShopifyAuthStart(request: Request): Promise<Response> {
     if (err instanceof ShopifyOAuthConfigError) {
       return json({ error: err.message }, 503);
     }
+    console.error("shopify_oauth_start_failed", {
+      error_type: err instanceof Error ? err.name : "Error",
+    });
     const message =
       err instanceof Error ? err.message : "Shopify OAuth start failed";
     if (/DATABASE_URL|meta store/i.test(message)) {

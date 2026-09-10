@@ -2,7 +2,14 @@ import {
   verifyShopifyInviteToken,
 } from "@devjewels-channels/shopify/shopifyInvite";
 import { getShopifyInviteStore } from "@devjewels-channels/shopify/inviteStore";
-import { redirect } from "../response";
+import { redirect, redirectTo } from "../response";
+
+function inviteFail(
+  request: Request,
+  error: "invalid_invite" | "invite_used",
+): Response {
+  return redirectTo(request, `/connect/success?shopify_error=${error}`);
+}
 
 /**
  * GET /api/connect/shopify?token=
@@ -12,25 +19,34 @@ export async function getConnectShopify(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const token = url.searchParams.get("token");
   if (!token?.trim()) {
-    return redirect("/connect/success?shopify_error=invalid_invite", 302);
+    return inviteFail(request, "invalid_invite");
   }
 
   const verified = verifyShopifyInviteToken(token);
   if (!verified.ok) {
-    return redirect("/connect/success?shopify_error=invalid_invite", 302);
+    return inviteFail(request, "invalid_invite");
   }
 
   const { payload } = verified;
-  const consumed = await getShopifyInviteStore().consumeInvite(payload.jti);
+  let consumed;
+  try {
+    consumed = await getShopifyInviteStore().consumeInvite(payload.jti);
+  } catch (err) {
+    console.error("shopify_invite_consume_failed", {
+      error_type: err instanceof Error ? err.name : "Error",
+      message: err instanceof Error ? err.message.slice(0, 200) : "unknown",
+    });
+    return inviteFail(request, "invalid_invite");
+  }
   if (!consumed) {
-    return redirect("/connect/success?shopify_error=invite_used", 302);
+    return inviteFail(request, "invite_used");
   }
 
   if (
-    consumed.customer_id !== payload.customer_id ||
+    Number(consumed.customer_id) !== payload.customer_id ||
     consumed.shop_domain.trim().toLowerCase() !== payload.shop.trim().toLowerCase()
   ) {
-    return redirect("/connect/success?shopify_error=invalid_invite", 302);
+    return inviteFail(request, "invalid_invite");
   }
 
   const authUrl = new URL("/api/shopify/auth", url.origin);
