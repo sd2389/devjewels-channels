@@ -22,6 +22,7 @@
     "selfcheck:customers": "npx --yes tsx src/integrations/deverp.customers.selfcheck.ts",
     "selfcheck:vault": "npx --yes tsx src/security/vault.selfcheck.ts",
     "selfcheck:shopify-auth-route": "npx --yes tsx src/app/api/shopify/auth/route.selfcheck.ts",
+    "selfcheck:shopify-connect": "npx --yes tsx src/http/routes/shopifyConnect.selfcheck.ts",
     "selfcheck:shopify-install-nav": "npx --yes tsx \"src/app/(dashboard)/shopifyInstallNav.selfcheck.ts\"",
     "selfcheck:shopify-compliance": "npx --yes tsx src/services/shopifyCompliance.selfcheck.ts",
     "selfcheck:design-markup": "npx --yes tsx src/services/connectionDesignMarkups.selfcheck.ts",

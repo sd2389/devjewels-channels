@@ -1,15 +1,5 @@
 import Link from "next/link";
-
-const ERROR_MESSAGES: Record<string, string> = {
-  invalid_invite: "This install link is invalid or has expired. Ask DevJewels staff for a new link.",
-  invite_used: "This install link was already used. Ask DevJewels staff for a new link.",
-  missing_oauth_params: "Shopify install was cancelled or incomplete.",
-  invalid_hmac: "Shopify install failed a security check. Try again from your install link.",
-  invalid_state: "Install session expired. Open your install link again.",
-  oauth_not_configured: "Shopify app is not configured yet. Contact DevJewels staff.",
-  missing_customer: "Install link is missing customer context. Contact DevJewels staff.",
-  connect_failed: "Could not finish connecting your store. Contact DevJewels staff.",
-};
+import { connectSuccessErrorMessage } from "@/http/connectSuccessPage";
 
 type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -22,7 +12,7 @@ export default async function ConnectSuccessPage({ searchParams }: PageProps) {
     typeof params.shopify_error === "string" ? params.shopify_error : null;
   const reconnected = params.reconnected === "1";
 
-  const errorMessage = errorCode ? ERROR_MESSAGES[errorCode] ?? "Something went wrong." : null;
+  const errorMessage = connectSuccessErrorMessage(errorCode);
 
   return (
     <div

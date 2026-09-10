@@ -28,9 +28,20 @@ export function assertChannelsOnlySql(sql: string): void {
   }
 }
 
+/**
+ * node-pg 8.23 treats sslmode=require as verify-full. Lambda's Node trust store
+ * does not include the Amazon RDS CA, so require-without-compat fails TLS.
+ * uselibpqcompat restores libpq require (encrypt, no CA verify) to match Django.
+ */
+export function withLibpqSslCompat(connectionString: string): string {
+  if (/[?&]uselibpqcompat=/i.test(connectionString)) return connectionString;
+  const sep = connectionString.includes("?") ? "&" : "?";
+  return `${connectionString}${sep}uselibpqcompat=true`;
+}
+
 function createPool(connectionString: string): Pool {
   return new Pool({
-    connectionString,
+    connectionString: withLibpqSslCompat(connectionString),
     // Force session search_path so unqualified names stay in channels when used carefully.
     options: `-c search_path=${CHANNELS_SCHEMA}`,
     max: 10,

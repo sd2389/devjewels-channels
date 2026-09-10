@@ -16,6 +16,7 @@ import {
   postWoocommerceWebhooks,
 } from "./routes/admin";
 import { getConnectShopify } from "./routes/shopifyConnect";
+import { getConnectSuccess } from "./routes/connectSuccess";
 import { json } from "./response";
 
 type RouteHandler = (req: Request, params: Record<string, string>) => Promise<Response>;
@@ -70,6 +71,10 @@ const routes: Array<{ pattern: string; handle: RouteHandler }> = [
   {
     pattern: "GET /api/connect/shopify",
     handle: async (req) => getConnectShopify(req),
+  },
+  {
+    pattern: "GET /connect/success",
+    handle: async (req) => getConnectSuccess(req),
   },
   {
     pattern: "POST /api/woocommerce/webhooks",
