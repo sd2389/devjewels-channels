@@ -155,7 +155,7 @@ Token paste remains under **Advanced**. Re-install updates the same connection c
    - Inventory → Shopify `inventorySetQuantities`
    - Product → pull Django facade → **create** if no `product_mapping`, else **update** (`productUpdate` + variant bulk update/create)
 6. **Connection flags** — `sync_inventory`, `sync_products` (catalog create/update, default ON), `sync_price`, `sync_orders`.
-7. **Secrets** — `connection.credentials_secret_ref` is `env:VAR` or `sm:ID` only; tokens never stored in Postgres or logs.
+7. **Secrets** — `connection.credentials_secret_ref` is `env:VAR`, `sm:ID`, or `vault:<id>` (payload in `channels.vault_secret` or local files). Never log secret values.
 
 ### What auto-syncs now
 
@@ -173,6 +173,7 @@ Token paste remains under **Advanced**. Re-install updates the same connection c
 psql "$DATABASE_URL" -f apps/core/src/db/shared/001_channels_schema.sql
 psql "$DATABASE_URL" -f apps/core/src/db/shared/002_connection_entitlements.sql
 psql "$DATABASE_URL" -f apps/core/src/db/shared/003_connection_design_markup.sql
+psql "$DATABASE_URL" -f apps/core/src/db/shared/004_vault_secret.sql
 psql "$DATABASE_URL" -f apps/shopify/src/db/001_shopify_tables.sql
 psql "$DATABASE_URL" -f apps/shopify/src/db/004_shopify_connect_invite.sql
 

@@ -4,7 +4,7 @@
  * Ref formats:
  * - `env:VAR_NAME` → process.env.VAR_NAME
  * - `sm:SECRET_ID` → local stub `CHANNELS_SM_STUB_<SECRET_ID>` (Secrets Manager later)
- * - `vault:id` → `.data/secrets/<id>.json` (staff UI connect flow; UUID or stable id)
+ * - `vault:id` → `channels.vault_secret` on Lambda, else `.data/secrets/<id>.json`
  *
  * Shopify credential JSON (preferred):
  *   {"accessToken":"shpat_…","shopDomain":"store.myshopify.com"}

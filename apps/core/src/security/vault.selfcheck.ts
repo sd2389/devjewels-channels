@@ -9,6 +9,7 @@ import {
   readVaultSecret,
   tryReadVaultSecret,
   resolveVaultRoot,
+  usesDatabaseVault,
 } from "./vault";
 import {
   getShopifyOAuthConfig,
@@ -26,6 +27,7 @@ async function main() {
 
   const dir = path.join(process.cwd(), ".data", "secrets-selfcheck");
   process.env.CHANNELS_VAULT_DIR = dir;
+  assert.equal(usesDatabaseVault(), false);
   const ref = await writeVaultSecret({
     accessToken: "shpat_test",
     shopDomain: "demo.myshopify.com",
