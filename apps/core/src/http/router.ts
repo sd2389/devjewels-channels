@@ -17,6 +17,7 @@ import {
 } from "./routes/admin";
 import { getConnectShopify } from "./routes/shopifyConnect";
 import { getConnectSuccess } from "./routes/connectSuccess";
+import { getAppRoot } from "./routes/appLaunch";
 import { json } from "./response";
 
 type RouteHandler = (req: Request, params: Record<string, string>) => Promise<Response>;
@@ -48,6 +49,10 @@ function match(
 }
 
 const routes: Array<{ pattern: string; handle: RouteHandler }> = [
+  {
+    pattern: "GET /",
+    handle: async (req) => getAppRoot(req),
+  },
   {
     pattern: "GET /health",
     handle: async () => json({ ok: true, service: "devjewels-channels" }),

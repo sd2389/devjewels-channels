@@ -13,6 +13,10 @@ export const CONNECT_SUCCESS_ERRORS: Record<string, string> = {
   connect_failed: "Could not finish connecting your store. Contact DevJewels staff.",
 };
 
+export const CONNECT_INSTALLED_TITLE = "App installed";
+export const CONNECT_INSTALLED_BODY =
+  "The DevJewels app is installed on your Shopify store. Return to DevJewels to finish connecting your catalog — you can close this page.";
+
 export function connectSuccessErrorMessage(errorCode: string | null): string | null {
   if (!errorCode) return null;
   return CONNECT_SUCCESS_ERRORS[errorCode] ?? "Something went wrong.";
@@ -30,17 +34,23 @@ export function renderConnectSuccessHtml(input: {
   connected: boolean;
   reconnected: boolean;
   errorCode: string | null;
+  installed?: boolean;
 }): string {
   const errorMessage = connectSuccessErrorMessage(input.errorCode);
   const ok = input.connected && !errorMessage;
+  const installed = Boolean(input.installed) && !ok && !errorMessage;
   const title = ok
     ? input.reconnected
       ? "Store reconnected"
       : "Store connected"
-    : "Could not connect store";
+    : installed
+      ? CONNECT_INSTALLED_TITLE
+      : "Could not connect store";
   const body = ok
     ? "Your Shopify store is linked to DevJewels. Our team will finish setup and sync your catalog — you can close this page."
-    : errorMessage || "Something went wrong.";
+    : installed
+      ? CONNECT_INSTALLED_BODY
+      : errorMessage || "Something went wrong.";
 
   return `<!doctype html>
 <html lang="en">

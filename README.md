@@ -176,6 +176,7 @@ psql "$DATABASE_URL" -f apps/core/src/db/shared/003_connection_design_markup.sql
 psql "$DATABASE_URL" -f apps/core/src/db/shared/004_vault_secret.sql
 psql "$DATABASE_URL" -f apps/shopify/src/db/001_shopify_tables.sql
 psql "$DATABASE_URL" -f apps/shopify/src/db/004_shopify_connect_invite.sql
+psql "$DATABASE_URL" -f apps/shopify/src/db/005_shopify_connect_invite_shop_pending.sql
 
 # Credentials in env (not SQL)
 export CHANNELS_SECRET_shopify_local='{"accessToken":"shpat_xxx","shopDomain":"your-store.myshopify.com"}'
