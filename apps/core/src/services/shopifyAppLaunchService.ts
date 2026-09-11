@@ -54,19 +54,7 @@ export async function resolveShopifyAppLaunch(
     return { kind: "unauthorized" };
   }
 
-  try {
-    const invite = await getShopifyInviteStore().findPendingByShopDomain(shop);
-    const customerId = invite ? Number(invite.customer_id) : 0;
-    if (invite && Number.isInteger(customerId) && customerId > 0) {
-      return { kind: "oauth", shop, customerId };
-    }
-  } catch (err) {
-    console.error("shopify_app_launch_invite_lookup_failed", {
-      shop,
-      error_type: err instanceof Error ? err.name : "Error",
-    });
-  }
-
+  // Connected shops first: leftover pending invites must not restart OAuth.
   try {
     const connectionId =
       await getShopifyMetaStore().getConnectionIdByShopDomain(shop);
@@ -79,6 +67,19 @@ export async function resolveShopifyAppLaunch(
       error_type: err instanceof Error ? err.name : "Error",
     });
     return { kind: "finish_setup" };
+  }
+
+  try {
+    const invite = await getShopifyInviteStore().findPendingByShopDomain(shop);
+    const customerId = invite ? Number(invite.customer_id) : 0;
+    if (invite && Number.isInteger(customerId) && customerId > 0) {
+      return { kind: "oauth", shop, customerId };
+    }
+  } catch (err) {
+    console.error("shopify_app_launch_invite_lookup_failed", {
+      shop,
+      error_type: err instanceof Error ? err.name : "Error",
+    });
   }
 
   return { kind: "finish_setup" };

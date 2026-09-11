@@ -158,7 +158,14 @@ async function testInviteCustomerIdIsNotHardcoded(): Promise<void> {
 
 async function testConnectedShopRedirectsToSuccess(): Promise<void> {
   await withOauthEnv(async () => {
-    setShopifyInviteStoreForTests(createMemoryShopifyInviteStore());
+    const invites = createMemoryShopifyInviteStore();
+    await invites.createInvite({
+      jti: createInviteJti(),
+      customerId: 907,
+      shopDomain: "enfakt-v6.myshopify.com",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    setShopifyInviteStoreForTests(invites);
     setShopifyMetaStoreForTests(
       createMemoryShopifyMetaStore({
         shops: [
