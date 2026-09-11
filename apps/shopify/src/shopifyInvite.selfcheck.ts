@@ -80,6 +80,21 @@ async function testSingleUseJti() {
   setShopifyInviteStoreForTests(null);
 }
 
+async function testFindPendingByShopDomain() {
+  const store = createMemoryShopifyInviteStore();
+  const shop = "enfakt-v6.myshopify.com";
+  await store.createInvite({
+    jti: createInviteJti(),
+    customerId: 907,
+    shopDomain: shop,
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+  const pending = await store.findPendingByShopDomain(shop);
+  assert.ok(pending);
+  assert.equal(pending.customer_id, 907);
+  assert.equal(await store.findPendingByShopDomain("other.myshopify.com"), null);
+}
+
 function testMerchantOAuthStateParsing() {
   const state = `${crypto.randomUUID()}.1234.m`;
   assert.equal(parseCustomerIdFromOAuthState(state), 1234);
@@ -94,6 +109,7 @@ async function main() {
   testExpiredTokenRejected();
   testBadSignatureRejected();
   await testSingleUseJti();
+  await testFindPendingByShopDomain();
   testMerchantOAuthStateParsing();
   console.log("shopifyInvite self-check ok");
 }

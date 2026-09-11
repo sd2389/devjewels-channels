@@ -11,6 +11,7 @@ export async function getConnectSuccess(request: Request): Promise<Response> {
       connected: url.searchParams.get("connected") === "1",
       reconnected: url.searchParams.get("reconnected") === "1",
       errorCode: url.searchParams.get("shopify_error"),
+      installed: url.searchParams.get("installed") === "1",
     }),
   );
 }

@@ -24,6 +24,10 @@ export type ShopifyInviteStore = {
   }): Promise<void>;
   /** Atomically mark consumed; returns null when missing/expired/already used. */
   consumeInvite(jti: string): Promise<ShopifyConnectInviteRow | null>;
+  /** Latest unconsumed, unexpired invite for a shop. Does not consume. */
+  findPendingByShopDomain(
+    shopDomain: string,
+  ): Promise<ShopifyConnectInviteRow | null>;
 };
 
 function pgStore(db: SqlClient): ShopifyInviteStore {
@@ -61,6 +65,32 @@ function pgStore(db: SqlClient): ShopifyInviteStore {
       );
       return result.rows[0] ?? null;
     },
+
+    async findPendingByShopDomain(shopDomain) {
+      const normalized = shopDomain.trim().toLowerCase();
+      if (!normalized) return null;
+      const result = await db.query<{
+        jti: string;
+        customer_id: number;
+        shop_domain: string;
+        expires_at: Date;
+        consumed_at: Date | null;
+      }>(
+        `SELECT jti::text AS jti,
+                customer_id,
+                shop_domain,
+                expires_at,
+                consumed_at
+         FROM ${CHANNELS_SCHEMA}.shopify_connect_invite
+         WHERE lower(shop_domain) = $1
+           AND consumed_at IS NULL
+           AND expires_at > now()
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [normalized],
+      );
+      return result.rows[0] ?? null;
+    },
   };
 }
 
@@ -85,6 +115,20 @@ export function createMemoryShopifyInviteStore(): ShopifyInviteStore & {
       if (row.expires_at.getTime() <= Date.now()) return null;
       row.consumed_at = new Date();
       return { ...row };
+    },
+    async findPendingByShopDomain(shopDomain) {
+      const normalized = shopDomain.trim().toLowerCase();
+      if (!normalized) return null;
+      let best: ShopifyConnectInviteRow | null = null;
+      for (const row of rows.values()) {
+        if (row.consumed_at) continue;
+        if (row.expires_at.getTime() <= Date.now()) continue;
+        if (row.shop_domain.trim().toLowerCase() !== normalized) continue;
+        if (!best || row.expires_at.getTime() > best.expires_at.getTime()) {
+          best = row;
+        }
+      }
+      return best ? { ...best } : null;
     },
   };
 }

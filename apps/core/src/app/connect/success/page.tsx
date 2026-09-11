@@ -1,5 +1,9 @@
 import Link from "next/link";
-import { connectSuccessErrorMessage } from "@/http/connectSuccessPage";
+import {
+  CONNECT_INSTALLED_BODY,
+  CONNECT_INSTALLED_TITLE,
+  connectSuccessErrorMessage,
+} from "@/http/connectSuccessPage";
 
 type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -11,8 +15,10 @@ export default async function ConnectSuccessPage({ searchParams }: PageProps) {
   const errorCode =
     typeof params.shopify_error === "string" ? params.shopify_error : null;
   const reconnected = params.reconnected === "1";
+  const installed = params.installed === "1";
 
   const errorMessage = connectSuccessErrorMessage(errorCode);
+  const showInstalled = installed && !connected && !errorMessage;
 
   return (
     <div
@@ -50,6 +56,15 @@ export default async function ConnectSuccessPage({ searchParams }: PageProps) {
           <p style={{ margin: 0, lineHeight: 1.6, opacity: 0.85 }}>
             Your Shopify store is linked to DevJewels. Our team will finish setup and
             sync your catalog — you can close this page.
+          </p>
+        </>
+      ) : showInstalled ? (
+        <>
+          <h1 style={{ fontSize: "1.35rem", fontWeight: 600, margin: "0 0 0.75rem" }}>
+            {CONNECT_INSTALLED_TITLE}
+          </h1>
+          <p style={{ margin: 0, lineHeight: 1.6, opacity: 0.85 }}>
+            {CONNECT_INSTALLED_BODY}
           </p>
         </>
       ) : (

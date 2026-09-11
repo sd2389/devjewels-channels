@@ -67,6 +67,7 @@ Apply invite table migration once:
 
 ```bash
 psql "$DATABASE_URL" -f apps/shopify/src/db/004_shopify_connect_invite.sql
+psql "$DATABASE_URL" -f apps/shopify/src/db/005_shopify_connect_invite_shop_pending.sql
 ```
 
 Optional dedicated signing secret (defaults to `CHANNELS_SERVICE_TOKEN`):

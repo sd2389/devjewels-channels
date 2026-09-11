@@ -101,6 +101,9 @@ async function testConsumeThrowRedirects(): Promise<void> {
     async consumeInvite() {
       throw new Error("relation \"shopify_connect_invite\" does not exist");
     },
+    async findPendingByShopDomain() {
+      return null;
+    },
   });
   const jti = createInviteJti();
   const expiresAt = new Date(Date.now() + 60_000);
