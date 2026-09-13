@@ -12,6 +12,7 @@ import {
   setConnectionStoreForTests,
 } from "./connections";
 import { connectShopifyStore } from "./connectShopifyService";
+import { drainMemoryProductQueue } from "./queue";
 import {
   createMemoryShopifyMetaStore,
   setShopifyMetaStoreForTests,
@@ -155,6 +156,7 @@ async function main(): Promise<void> {
   process.env.CHANNELS_PUBLIC_BASE_URL = "https://channels.example.com";
   process.env.SHOPIFY_API_SECRET = "whsec_connect";
   process.env.SHOPIFY_API_VERSION = "2025-01";
+  delete process.env.PRODUCT_SYNC_QUEUE_URL;
 
   await resetStores();
   setDeverpClientForTests(entitlementsClient(99));
@@ -302,6 +304,15 @@ async function main(): Promise<void> {
     }
     if (first.locations.length !== 2) throw new Error("expected 2 locations");
     if (first.webhooks.length !== 3) throw new Error("expected 3 webhooks");
+    const firstBackfill = drainMemoryProductQueue();
+    if (
+      firstBackfill.length !== 1 ||
+      firstBackfill[0]?.importId == null ||
+      firstBackfill[0].connectionId !== first.connection.id ||
+      firstBackfill[0].kind !== "product.sync"
+    ) {
+      throw new Error("connect must enqueue catalog import, not run it inline");
+    }
 
     // --- Reconnect same shop + same customer is idempotent ---
     const second = await connectShopifyStore({
@@ -326,6 +337,10 @@ async function main(): Promise<void> {
       second.connection.markup_value !== 1.25
     ) {
       throw new Error("reconnect must persist updated markup");
+    }
+    const secondBackfill = drainMemoryProductQueue();
+    if (secondBackfill.length !== 1 || secondBackfill[0]?.importId == null) {
+      throw new Error("reconnect must enqueue catalog import");
     }
 
     // --- Reconnect must re-derive syncOrders when can_place_orders flips ---

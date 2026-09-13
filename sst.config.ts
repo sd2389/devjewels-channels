@@ -137,7 +137,9 @@ export default $config({
     const productDlq = new sst.aws.Queue("ProductSyncDlq");
     const productSync = new sst.aws.Queue("ProductSync", {
       dlq: { queue: productDlq.arn, retry: 5 },
-      visibilityTimeout: "90 seconds",
+      // Full catalog import (200 designs) exceeds the HTTP/API Gateway budget;
+      // worker timeout must exceed that work, and visibility must exceed Lambda.
+      visibilityTimeout: "720 seconds",
     });
 
     const priceDlq = new sst.aws.Queue("PriceSyncDlq");
@@ -177,6 +179,7 @@ export default $config({
     productSync.subscribe({
       handler: "apps/core/src/workers/productSync.handler",
       ...lambdaDefaults,
+      timeout: "10 minutes",
       link: [productSync, inventorySync],
       environment: {
         ...sharedEnv,
