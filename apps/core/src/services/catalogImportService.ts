@@ -1,7 +1,8 @@
 /**
  * Catalog import orchestration:
  * create catalog_import job → page Django designs → fetch inventory →
- * adapter.createProduct or updateProduct → product/variant mappings → progress + sync_log.
+ * adapter.createProduct or updateProduct (OOS designs still created, qty 0) →
+ * product/variant mappings → progress + sync_log.
  *
  * Concurrency is capped (no unbounded fan-out).
  */
@@ -163,18 +164,17 @@ async function importOneDesign(input: {
   tags: string[];
 }): Promise<"ok" | "skipped" | "failed"> {
   const inventory = await deverpClient.getInventory(input.designNo);
-  const jobs = (inventory.jobs || []).filter((j) => String(j.job_no || "").trim());
-  if (jobs.length === 0) {
-    await writeSyncLog({
-      connectionId: input.connectionId,
-      platform: input.platform,
-      jobType: "product",
-      status: "SKIPPED",
-      designNo: input.designNo,
-      message: "no_live_jobs",
-    });
-    return "skipped";
-  }
+  const liveJobs = (inventory.jobs || []).filter((j) =>
+    String(j.job_no || "").trim(),
+  );
+  // Out of stock still gets a Shopify product (qty 0). Merchant can deactivate.
+  // Same placeholder as productSyncService. Ceiling: leftover design_no SKU after
+  // live jobs appear — upgrade is to drop the placeholder on the next stocked sync.
+  const jobs =
+    liveJobs.length > 0
+      ? liveJobs
+      : [{ job_no: input.designNo, totamt: input.defaultPrice }];
+  const outOfStock = liveJobs.length === 0;
 
   const variants = [];
   for (const j of jobs) {
@@ -194,7 +194,7 @@ async function importOneDesign(input: {
       jobNo,
       sku: jobNo,
       price,
-      quantity: 1,
+      quantity: outOfStock ? 0 : 1,
       details: detailsFromInventoryJob(
         j as Record<string, unknown>,
         input.productType,
