@@ -10,7 +10,12 @@ import {
   updateConnectionCredentials,
   type ConnectionRow,
 } from "@/services/connections";
-import { runCatalogImport, type CatalogImportResult } from "@/services/catalogImportService";
+import {
+  createCatalogImportJob,
+  runCatalogImport,
+  type CatalogImportResult,
+} from "@/services/catalogImportService";
+import { enqueueProductSync } from "@/services/queue";
 import { writeVaultSecret } from "@/security/vault";
 import { optionalProcessEnv } from "@/config/serverEnv";
 import { resolveShopifyCredentials } from "@/security/secrets";
@@ -273,20 +278,34 @@ export async function connectShopifyStore(
     skip: input.skipWebhookRegistration,
   });
 
-  // Backfill entitled feed on first connect / reconnect.
+  // Never await catalog import on the HTTP path: API Gateway ~29s / Lambda 60s
+  // time out (production 503 Service Unavailable on OAuth callback).
+  await enqueueCatalogBackfill(connection);
+
+  return { connection, shopDomain, locations, reconnected, webhooks };
+}
+
+async function enqueueCatalogBackfill(connection: ConnectionRow): Promise<void> {
   try {
-    await runCatalogImport({
+    const job = await createCatalogImportJob(connection.id);
+    const result = await enqueueProductSync({
+      kind: "product.sync",
       connectionId: connection.id,
-      maxDesigns: 200,
+      platform: connection.platform,
+      designNo: "*",
+      importId: job.id,
+    });
+    console.info("shopify_connect_backfill_enqueued", {
+      connectionId: connection.id,
+      importId: job.id,
+      transport: result.transport,
     });
   } catch (err) {
-    console.warn("shopify_connect_backfill_failed", {
+    console.warn("shopify_connect_backfill_enqueue_failed", {
       connectionId: connection.id,
       error: err instanceof Error ? err.message.slice(0, 200) : "unknown",
     });
   }
-
-  return { connection, shopDomain, locations, reconnected, webhooks };
 }
 
 export async function setShopifyPrimaryLocation(
