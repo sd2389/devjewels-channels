@@ -9,9 +9,10 @@ import {
   createMemoryConnectionStore,
   getConnectionById,
   listConnections,
+  setConnectionActive,
   setConnectionStoreForTests,
 } from "./connections";
-import { connectShopifyStore } from "./connectShopifyService";
+import { connectShopifyStore, importCatalogForConnection } from "./connectShopifyService";
 import { drainMemoryProductQueue } from "./queue";
 import {
   createMemoryShopifyMetaStore,
@@ -314,6 +315,18 @@ async function main(): Promise<void> {
       throw new Error("connect must enqueue catalog import, not run it inline");
     }
 
+    const manualImport = await importCatalogForConnection(first.connection.id);
+    if (manualImport.status !== "pending" || !manualImport.importId) {
+      throw new Error("staff import must enqueue, not run catalog inline");
+    }
+    const manualQueued = drainMemoryProductQueue();
+    if (
+      manualQueued.length !== 1 ||
+      manualQueued[0]?.importId !== manualImport.importId
+    ) {
+      throw new Error("staff import must enqueue one catalog job");
+    }
+
     // --- Reconnect same shop + same customer is idempotent ---
     const second = await connectShopifyStore({
       shopDomain: "acme.myshopify.com",
@@ -452,6 +465,12 @@ async function main(): Promise<void> {
     if (noOrders.connection.sync_orders !== false) {
       throw new Error("syncOrders must be false when can_place_orders=false");
     }
+    await setConnectionActive(noOrders.connection.id, false);
+    await assertRejects(
+      "inactive connection import",
+      () => importCatalogForConnection(noOrders.connection.id),
+      "inactive",
+    );
 
     console.log("connect.selfcheck OK");
   } finally {

@@ -265,7 +265,6 @@ export async function postAdminConnectionById(
     const body = (await req.json()) as {
       action?: string;
       externalLocationId?: string;
-      maxDesigns?: number;
       markupMode?: "none" | "percent" | "multiplier";
       markupValue?: number;
       designMarkups?: unknown;
@@ -281,10 +280,7 @@ export async function postAdminConnectionById(
     }
 
     if (action === "import_catalog") {
-      const result = await importCatalogForConnection(
-        id,
-        typeof body.maxDesigns === "number" ? body.maxDesigns : 50,
-      );
+      const result = await importCatalogForConnection(id);
       return json({ import: result });
     }
 
