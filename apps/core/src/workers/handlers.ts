@@ -3,7 +3,10 @@
  * Each message is connection-scoped; AdapterRouter picks the platform.
  */
 import { registerDefaultAdapters } from "@/channels/registerAdapters";
-import { runCatalogImport } from "@/services/catalogImportService";
+import {
+  CATALOG_IMPORT_MAX_DESIGNS,
+  runCatalogImport,
+} from "@/services/catalogImportService";
 import { runInventorySyncJob } from "@/services/inventorySyncService";
 import { runOrderProcessingJob } from "@/services/orderProcessingService";
 import { runProductSyncJob } from "@/services/productSyncService";
@@ -88,7 +91,7 @@ export async function handleProductSync(job: ProductSyncJob): Promise<void> {
     const result = await runCatalogImport({
       connectionId: job.connectionId,
       importId: job.importId,
-      maxDesigns: 200,
+      maxDesigns: CATALOG_IMPORT_MAX_DESIGNS,
       concurrency: 3,
     });
     console.info("product_sync_import_outcome", {

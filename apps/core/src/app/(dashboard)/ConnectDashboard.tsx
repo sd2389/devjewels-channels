@@ -554,7 +554,7 @@ export function ConnectDashboard() {
         `/api/admin/connections/${selectedId}`,
         {
           method: "POST",
-          body: JSON.stringify({ action: "import_catalog", maxDesigns: 50 }),
+          body: JSON.stringify({ action: "import_catalog" }),
         },
       );
       setImportResult(data.import);
@@ -1347,7 +1347,7 @@ export function ConnectDashboard() {
                   onClick={onImport}
                   style={btnPrimary}
                 >
-                  {busy ? "Working…" : "Import designs (up to 50)"}
+                  {busy ? "Working…" : "Import all designs"}
                 </button>
               </div>
             </>
@@ -1358,9 +1358,9 @@ export function ConnectDashboard() {
               role="status"
               style={{ marginTop: "1rem", opacity: 0.9, lineHeight: 1.5 }}
             >
-              Import {importResult.status}: {importResult.processed} processed,{" "}
-              {importResult.failed} failed, {importResult.skipped} skipped of{" "}
-              {importResult.totalDesigns}.
+              {importResult.status === "pending"
+                ? "Import queued. Syncing this customer's entitled catalog in the background."
+                : `Import ${importResult.status}: ${importResult.processed} processed, ${importResult.failed} failed, ${importResult.skipped} skipped of ${importResult.totalDesigns}.`}
             </p>
           ) : null}
         </section>

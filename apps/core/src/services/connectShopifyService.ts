@@ -12,7 +12,6 @@ import {
 } from "@/services/connections";
 import {
   createCatalogImportJob,
-  runCatalogImport,
   type CatalogImportResult,
 } from "@/services/catalogImportService";
 import { enqueueProductSync } from "@/services/queue";
@@ -285,21 +284,28 @@ export async function connectShopifyStore(
   return { connection, shopDomain, locations, reconnected, webhooks };
 }
 
+async function enqueueCatalogImport(
+  connection: ConnectionRow,
+): Promise<{ importId: string; transport: string }> {
+  const job = await createCatalogImportJob(connection.id);
+  const result = await enqueueProductSync({
+    kind: "product.sync",
+    connectionId: connection.id,
+    platform: connection.platform,
+    designNo: "*",
+    importId: job.id,
+  });
+  console.info("shopify_connect_backfill_enqueued", {
+    connectionId: connection.id,
+    importId: job.id,
+    transport: result.transport,
+  });
+  return { importId: job.id, transport: result.transport };
+}
+
 async function enqueueCatalogBackfill(connection: ConnectionRow): Promise<void> {
   try {
-    const job = await createCatalogImportJob(connection.id);
-    const result = await enqueueProductSync({
-      kind: "product.sync",
-      connectionId: connection.id,
-      platform: connection.platform,
-      designNo: "*",
-      importId: job.id,
-    });
-    console.info("shopify_connect_backfill_enqueued", {
-      connectionId: connection.id,
-      importId: job.id,
-      transport: result.transport,
-    });
+    await enqueueCatalogImport(connection);
   } catch (err) {
     console.warn("shopify_connect_backfill_enqueue_failed", {
       connectionId: connection.id,
@@ -383,7 +389,6 @@ export async function listConnectionDetails(): Promise<ConnectionDetail[]> {
 
 export async function importCatalogForConnection(
   connectionId: string,
-  maxDesigns = 50,
 ): Promise<CatalogImportResult> {
   const connection = await getConnectionById(connectionId);
   if (!connection) {
@@ -392,8 +397,13 @@ export async function importCatalogForConnection(
   if (!connection.is_active) {
     throw new Error("Connection is inactive");
   }
-  return runCatalogImport({
-    connectionId,
-    maxDesigns: Math.min(Math.max(maxDesigns, 1), 500),
-  });
+  const { importId } = await enqueueCatalogImport(connection);
+  return {
+    importId,
+    status: "pending",
+    processed: 0,
+    failed: 0,
+    skipped: 0,
+    totalDesigns: 0,
+  };
 }

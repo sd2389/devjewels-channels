@@ -37,6 +37,8 @@ import type { MarkupMode } from "@/services/markup";
 
 const DEFAULT_PAGE_SIZE = 50;
 const DEFAULT_CONCURRENCY = 3;
+/** Match Django entitlements payload cap (`_MAX_DESIGN_NOS_IN_PAYLOAD`). */
+export const CATALOG_IMPORT_MAX_DESIGNS = 5000;
 
 export type RunCatalogImportOptions = {
   connectionId: string;
@@ -363,7 +365,10 @@ export async function runCatalogImport(
     Math.min(options.concurrency ?? DEFAULT_CONCURRENCY, 8),
   );
   const pageSize = Math.max(1, Math.min(options.pageSize ?? DEFAULT_PAGE_SIZE, 100));
-  const maxDesigns = Math.max(1, Math.min(options.maxDesigns ?? 500, 5000));
+  const maxDesigns = Math.max(
+    1,
+    Math.min(options.maxDesigns ?? CATALOG_IMPORT_MAX_DESIGNS, CATALOG_IMPORT_MAX_DESIGNS),
+  );
 
   const connection = await getConnectionById(options.connectionId);
   if (!connection) {
