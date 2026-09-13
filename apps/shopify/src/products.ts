@@ -336,8 +336,9 @@ export async function createShopifyProduct(
   }
 
   // Shopify 2024-10+: create product shell, then variants via bulk APIs.
-  // SKU lives on inventoryItem; multi-job designs use a "Job" option.
-  const multi = input.variants.length > 1;
+  // SKU lives on inventoryItem. Always create a "Job" option, including
+  // single-variant / OOS placeholders, so a later live job can bulk-create
+  // without productVariantsBulkCreate failing on a missing option.
   const descriptionHtml = jobDetailsDescriptionHtml(input.designNo, input.variants);
   const result = await client.graphql<ProductCreateData>(PRODUCT_CREATE, {
     product: {
@@ -347,16 +348,12 @@ export async function createShopifyProduct(
       metafields: designMetafields(input.designNo),
       ...(descriptionHtml ? { descriptionHtml } : {}),
       ...shopifyTaxonomyFields(input),
-      ...(multi
-        ? {
-            productOptions: [
-              {
-                name: "Job",
-                values: input.variants.map((v) => ({ name: v.jobNo })),
-              },
-            ],
-          }
-        : {}),
+      productOptions: [
+        {
+          name: "Job",
+          values: input.variants.map((v) => ({ name: v.jobNo })),
+        },
+      ],
     },
   });
 
@@ -375,7 +372,7 @@ export async function createShopifyProduct(
       productId: product.id,
       strategy: "REMOVE_STANDALONE_VARIANT",
       variants: input.variants.map((v) =>
-        bulkVariantInput(input.designNo, v, multi),
+        bulkVariantInput(input.designNo, v, true),
       ),
     },
   );

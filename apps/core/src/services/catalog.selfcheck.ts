@@ -285,29 +285,35 @@ async function main(): Promise<void> {
     if (result.status !== "completed") {
       throw new Error(`expected completed, got ${result.status}`);
     }
-    if (result.processed !== 1) {
-      throw new Error(`expected 1 processed, got ${result.processed}`);
+    if (result.processed !== 2) {
+      throw new Error(`expected 2 processed (in-stock + OOS), got ${result.processed}`);
     }
-    if (result.skipped !== 1) {
-      throw new Error(`expected 1 skipped (no jobs), got ${result.skipped}`);
+    if (result.skipped !== 0) {
+      throw new Error(`expected 0 skipped, got ${result.skipped}`);
     }
     const mapped = await productMaps.getByDesign(CONN, "DJ-1");
     if (!mapped || mapped.external_product_id !== "gid://shopify/Product/1") {
       throw new Error("expected product_mapping for DJ-1");
     }
+    const oosMapped = await productMaps.getByDesign(CONN, "DJ-2");
+    if (!oosMapped || oosMapped.external_product_id !== "gid://shopify/Product/1") {
+      throw new Error("expected product_mapping for out-of-stock DJ-2");
+    }
     const variant = await variantMaps.getByDesignJob(CONN, "DJ-1", "JOB-1");
     if (!variant?.external_inventory_item_id) {
       throw new Error("expected variant_mapping with inventory item id");
     }
-    if (peekMemoryInventoryQueueDepth() !== 1) {
-      throw new Error("catalog import must enqueue inventory for each mapped live job");
+    if (peekMemoryInventoryQueueDepth() !== 2) {
+      throw new Error("catalog import must enqueue inventory for live job + OOS placeholder");
     }
     const firstInventoryJobs = drainMemoryInventoryQueue();
-    if (
-      firstInventoryJobs[0]?.designNo !== "DJ-1" ||
-      firstInventoryJobs[0]?.jobNo !== "JOB-1" ||
-      firstInventoryJobs[0]?.quantity !== 1
-    ) {
+    const liveInv = firstInventoryJobs.find(
+      (j) => j.designNo === "DJ-1" && j.jobNo === "JOB-1",
+    );
+    const oosInv = firstInventoryJobs.find(
+      (j) => j.designNo === "DJ-2" && j.jobNo === "DJ-2",
+    );
+    if (liveInv?.quantity !== 1 || oosInv?.quantity !== 0) {
       throw new Error(
         `catalog import inventory job is wrong: ${JSON.stringify(firstInventoryJobs)}`,
       );
@@ -319,15 +325,15 @@ async function main(): Promise<void> {
       concurrency: 2,
       maxDesigns: 10,
     });
-    if (result2.status !== "completed" || result2.processed !== 1) {
-      throw new Error(`re-import expected 1 processed, got ${JSON.stringify(result2)}`);
+    if (result2.status !== "completed" || result2.processed !== 2) {
+      throw new Error(`re-import expected 2 processed, got ${JSON.stringify(result2)}`);
     }
     const mapped2 = await productMaps.getByDesign(CONN, "DJ-1");
     if (!mapped2 || mapped2.external_product_id !== "gid://shopify/Product/1") {
       throw new Error("re-import should keep same product mapping");
     }
-    if (peekMemoryInventoryQueueDepth() !== 1) {
-      throw new Error("catalog re-import must refresh inventory for mapped live jobs");
+    if (peekMemoryInventoryQueueDepth() !== 2) {
+      throw new Error("catalog re-import must refresh inventory for mapped live + OOS designs");
     }
     drainMemoryInventoryQueue();
 
@@ -363,7 +369,7 @@ async function main(): Promise<void> {
     if (!importDenied) {
       throw new Error("catalog import must be denied after API-key revoke");
     }
-    if ((await productMaps.listByConnection(CONN)).length !== 1) {
+    if ((await productMaps.listByConnection(CONN)).length !== 2) {
       throw new Error("denied import must not mutate existing mappings");
     }
 

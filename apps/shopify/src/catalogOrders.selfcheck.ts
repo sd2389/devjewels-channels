@@ -118,6 +118,9 @@ async function main(): Promise<void> {
     throw new Error("inventory item id mismatch");
   }
   if (calls.length !== 2) throw new Error("expected create + variant graphql calls");
+  if (!calls[0]?.includes('"name":"Job"') && !calls[0]?.includes("Job")) {
+    throw new Error("single-variant create must still send a Job product option");
+  }
 
   const { updateShopifyProduct } = await import("./products");
   const updated = await updateShopifyProduct(client, {
@@ -138,6 +141,33 @@ async function main(): Promise<void> {
     throw new Error("update product id mismatch");
   }
   if (calls.length < 4) throw new Error("expected productUpdate graphql calls");
+
+  const updatedNewJob = await updateShopifyProduct(client, {
+    connectionId: "c",
+    designNo: "D1",
+    title: "D1 Updated",
+    externalProductId: "gid://shopify/Product/9",
+    variants: [
+      { jobNo: "JOB-A", price: 12, quantity: 1 },
+      { jobNo: "JOB-B", price: 13, quantity: 1 },
+    ],
+    existingVariants: [
+      {
+        jobNo: "JOB-A",
+        externalVariantId: "gid://shopify/ProductVariant/9",
+        externalInventoryItemId: "gid://shopify/InventoryItem/9",
+      },
+    ],
+  });
+  if (updatedNewJob.variants.length < 1) {
+    throw new Error("expected bulk-create of newly stocked job");
+  }
+  const createWithNewJob = calls.find(
+    (body) => body.includes("productVariantsBulkCreate") && body.includes("JOB-B"),
+  );
+  if (!createWithNewJob?.includes("Job")) {
+    throw new Error("adding a live job must send Job optionValues");
+  }
 
   console.log("shopify catalogOrders.selfcheck ok");
 }
