@@ -1,7 +1,7 @@
 /**
  * Catalog import orchestration:
- * create catalog_import job → page Django designs → fetch inventory →
- * adapter.createProduct or updateProduct (OOS designs still created, qty 0) →
+ * create catalog_import job → page Django designs → skip if product_mapping
+ * exists → else fetch inventory → adapter.createProduct (OOS qty 0) →
  * product/variant mappings → progress + sync_log.
  *
  * Concurrency is capped (no unbounded fan-out).
@@ -163,6 +163,46 @@ async function importOneDesign(input: {
   productType?: string;
   tags: string[];
 }): Promise<"ok" | "skipped" | "failed"> {
+  const mappingStore = getProductMappingStore();
+  const existing = await mappingStore.getByDesign(
+    input.connectionId,
+    input.designNo,
+  );
+
+  const liveEntitlements = await requireSyncableEntitlements(input.customerId, {
+    fresh: true,
+  });
+  if (
+    !liveEntitlements ||
+    !liveEntitlements.permissions.can_view_designs ||
+    !designInFeed(liveEntitlements, input.designNo)
+  ) {
+    await writeSyncLog({
+      connectionId: input.connectionId,
+      platform: input.platform,
+      jobType: "product",
+      status: "SKIPPED",
+      designNo: input.designNo,
+      message: "entitlement_revoked_before_import_mutation",
+    });
+    return "skipped";
+  }
+
+  // Mapping is the exists flag. Do not rewrite Shopify on re-import.
+  // ponytail: skip without GraphQL verify. Ceiling: stale mapping after a
+  // merchant deletes in Admin — upgrade is a product(id) check before skip.
+  if (existing?.external_product_id) {
+    await writeSyncLog({
+      connectionId: input.connectionId,
+      platform: input.platform,
+      jobType: "product",
+      status: "SKIPPED",
+      designNo: input.designNo,
+      message: "already_exists",
+    });
+    return "skipped";
+  }
+
   const inventory = await deverpClient.getInventory(input.designNo);
   const liveJobs = (inventory.jobs || []).filter((j) =>
     String(j.job_no || "").trim(),
@@ -203,71 +243,34 @@ async function importOneDesign(input: {
   }
 
   const adapter = AdapterRouter.get(input.platform);
-  const mappingStore = getProductMappingStore();
-  const existing = await mappingStore.getByDesign(input.connectionId, input.designNo);
   const variantStore = getVariantMappingStore();
 
-  const liveEntitlements = await requireSyncableEntitlements(input.customerId, {
-    fresh: true,
-  });
-  if (
-    !liveEntitlements ||
-    !liveEntitlements.permissions.can_view_designs ||
-    !designInFeed(liveEntitlements, input.designNo)
-  ) {
-    await writeSyncLog({
-      connectionId: input.connectionId,
-      platform: input.platform,
-      jobType: "product",
-      status: "SKIPPED",
-      designNo: input.designNo,
-      message: "entitlement_revoked_before_import_mutation",
-    });
-    return "skipped";
-  }
-
   try {
-    let result;
-    if (existing?.external_product_id) {
-      const existingVariants = [];
-      for (const v of variants) {
-        const mapped = await variantStore.getByDesignJob(
-          input.connectionId,
-          input.designNo,
-          v.jobNo,
-        );
-        if (mapped) {
-          existingVariants.push({
-            jobNo: v.jobNo,
-            externalVariantId: mapped.external_variant_id,
-            externalInventoryItemId: mapped.external_inventory_item_id ?? undefined,
-          });
-        }
-      }
-      result = await adapter.updateProduct({
+    const raced = await mappingStore.getByDesign(
+      input.connectionId,
+      input.designNo,
+    );
+    if (raced?.external_product_id) {
+      await writeSyncLog({
         connectionId: input.connectionId,
+        platform: input.platform,
+        jobType: "product",
+        status: "SKIPPED",
         designNo: input.designNo,
-        title: input.title,
-        credentialsSecretRef: input.credentialsSecretRef ?? undefined,
-        externalProductId: existing.external_product_id,
-        imageUrls: input.imageUrls,
-        productType: input.productType,
-        tags: input.tags,
-        variants,
-        existingVariants,
+        message: "already_exists",
       });
-    } else {
-      result = await adapter.createProduct({
-        connectionId: input.connectionId,
-        designNo: input.designNo,
-        title: input.title,
-        credentialsSecretRef: input.credentialsSecretRef ?? undefined,
-        imageUrls: input.imageUrls,
-        productType: input.productType,
-        tags: input.tags,
-        variants,
-      });
+      return "skipped";
     }
+    const result = await adapter.createProduct({
+      connectionId: input.connectionId,
+      designNo: input.designNo,
+      title: input.title,
+      credentialsSecretRef: input.credentialsSecretRef ?? undefined,
+      imageUrls: input.imageUrls,
+      productType: input.productType,
+      tags: input.tags,
+      variants,
+    });
 
     await upsertProductMapping({
       connectionId: input.connectionId,
@@ -306,7 +309,7 @@ async function importOneDesign(input: {
       jobType: "product",
       status: "SUCCESS",
       designNo: input.designNo,
-      message: `${existing ? "updated" : "created"} variants=${result.variants.length}`,
+      message: `created variants=${result.variants.length}`,
     });
     return "ok";
   } catch (err) {

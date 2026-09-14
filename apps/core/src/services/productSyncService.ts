@@ -1,5 +1,6 @@
 /**
- * Per-design product sync: create/update when entitled; delete when revoked.
+ * Per-design product sync: create when entitled and unmapped; skip if mapped;
+ * delete when revoked. Mapping is the exists flag — do not rewrite Shopify.
  * Pulls title/price/jobs from Django channels_api facades (customer-scoped).
  */
 import { registerDefaultAdapters } from "@/channels/registerAdapters";
@@ -134,7 +135,7 @@ async function runProductDelete(
 }
 
 /**
- * Sync one design_no for one connection (create, update, or delete).
+ * Sync one design_no for one connection (create if missing, skip if mapped, or delete).
  */
 export async function runProductSyncJob(
   job: ProductSyncJob,
@@ -230,6 +231,21 @@ export async function runProductSyncJob(
     return "SKIPPED";
   }
 
+  const mappingStore = getProductMappingStore();
+  const existingEarly = await mappingStore.getByDesign(job.connectionId, designNo);
+  // Mapping is the exists flag. Stock/price stay on inventory.sync / first create.
+  if (existingEarly?.external_product_id) {
+    await writeSyncLog({
+      connectionId: job.connectionId,
+      platform: job.platform,
+      jobType: "product",
+      status: "SKIPPED",
+      designNo,
+      message: "already_exists",
+    });
+    return "SKIPPED";
+  }
+
   let title = designNo;
   let defaultPrice = 0;
   let imageUrls: string[] = [];
@@ -311,8 +327,6 @@ export async function runProductSyncJob(
     });
   }
 
-  const mappingStore = getProductMappingStore();
-  const existing = await mappingStore.getByDesign(job.connectionId, designNo);
   const variantStore = getVariantMappingStore();
   const adapter = AdapterRouter.get(job.platform);
 
@@ -322,8 +336,9 @@ export async function runProductSyncJob(
     connection.customer_id,
     { fresh: true },
   );
+  const raced = await mappingStore.getByDesign(job.connectionId, designNo);
   if (!liveEntitlements || !designInFeed(liveEntitlements, designNo)) {
-    if (existing) {
+    if (raced?.external_product_id) {
       return runProductDelete({ ...job, action: "delete" });
     }
     await writeSyncLog({
@@ -336,110 +351,56 @@ export async function runProductSyncJob(
     });
     return "SKIPPED";
   }
+  if (raced?.external_product_id) {
+    await writeSyncLog({
+      connectionId: job.connectionId,
+      platform: job.platform,
+      jobType: "product",
+      status: "SKIPPED",
+      designNo,
+      message: "already_exists",
+    });
+    return "SKIPPED";
+  }
 
   try {
-    let outcome: ProductSyncOutcome;
-    let resultVariants: Array<{
-      jobNo: string;
-      externalVariantId: string;
-      externalInventoryItemId?: string;
-    }>;
+    const created = await adapter.createProduct({
+      connectionId: job.connectionId,
+      designNo,
+      title,
+      credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
+      imageUrls,
+      productType,
+      tags,
+      variants,
+    });
 
-    if (existing?.external_product_id) {
-      const existingVariants = [];
-      for (const v of variants) {
-        const mapped = await variantStore.getByDesignJob(
-          job.connectionId,
-          designNo,
-          v.jobNo,
-        );
-        if (mapped) {
-          existingVariants.push({
-            jobNo: v.jobNo,
-            externalVariantId: mapped.external_variant_id,
-            externalInventoryItemId: mapped.external_inventory_item_id ?? undefined,
-          });
-        }
-      }
-
-      const updated = await adapter.updateProduct({
+    await upsertProductMapping({
+      connectionId: job.connectionId,
+      designNo,
+      externalProductId: created.externalProductId,
+    });
+    for (const variant of created.variants) {
+      await variantStore.upsert({
         connectionId: job.connectionId,
         designNo,
-        title,
-        credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
-        externalProductId: existing.external_product_id,
-        imageUrls,
-        productType,
-        tags,
-        variants,
-        existingVariants,
-      });
-
-      await upsertProductMapping({
-        connectionId: job.connectionId,
-        designNo,
-        externalProductId: updated.externalProductId,
-      });
-      for (const variant of updated.variants) {
-        await variantStore.upsert({
-          connectionId: job.connectionId,
-          designNo,
-          jobNo: variant.jobNo,
-          externalVariantId: variant.externalVariantId,
-          externalInventoryItemId: variant.externalInventoryItemId ?? null,
-        });
-      }
-      resultVariants = updated.variants;
-      outcome = "UPDATED";
-      await writeSyncLog({
-        connectionId: job.connectionId,
-        platform: job.platform,
-        jobType: "product",
-        status: "SUCCESS",
-        designNo,
-        message: `updated variants=${updated.variants.length}`,
-      });
-    } else {
-      const created = await adapter.createProduct({
-        connectionId: job.connectionId,
-        designNo,
-        title,
-        credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
-        imageUrls,
-        productType,
-        tags,
-        variants,
-      });
-
-      await upsertProductMapping({
-        connectionId: job.connectionId,
-        designNo,
-        externalProductId: created.externalProductId,
-      });
-      for (const variant of created.variants) {
-        await variantStore.upsert({
-          connectionId: job.connectionId,
-          designNo,
-          jobNo: variant.jobNo,
-          externalVariantId: variant.externalVariantId,
-          externalInventoryItemId: variant.externalInventoryItemId ?? null,
-        });
-      }
-      resultVariants = created.variants;
-      outcome = "CREATED";
-      await writeSyncLog({
-        connectionId: job.connectionId,
-        platform: job.platform,
-        jobType: "product",
-        status: "SUCCESS",
-        designNo,
-        message: `created variants=${created.variants.length}`,
+        jobNo: variant.jobNo,
+        externalVariantId: variant.externalVariantId,
+        externalInventoryItemId: variant.externalInventoryItemId ?? null,
       });
     }
 
-    // Immediately set inventory after create/update when permission allows.
+    await writeSyncLog({
+      connectionId: job.connectionId,
+      platform: job.platform,
+      jobType: "product",
+      status: "SUCCESS",
+      designNo,
+      message: `created variants=${created.variants.length}`,
+    });
+
     if (canViewInventory && connection.sync_inventory) {
-      for (const variant of resultVariants) {
+      for (const variant of created.variants) {
         const qty =
           variants.find((v) => v.jobNo === variant.jobNo)?.quantity ?? 0;
         await enqueueInventorySync({
@@ -453,7 +414,7 @@ export async function runProductSyncJob(
       }
     }
 
-    return outcome;
+    return "CREATED";
   } catch (err) {
     if (err instanceof InventorySkipError) {
       await writeSyncLog({

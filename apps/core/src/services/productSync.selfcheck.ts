@@ -359,7 +359,7 @@ async function main(): Promise<void> {
   globalThis.fetch = installShopifyFetch(calls);
 
   try {
-    // --- Create then update ---
+    // --- Create then skip if mapping already exists ---
     const created = await runProductSyncJob({
       kind: "product.sync",
       connectionId: CONN_A,
@@ -372,17 +372,21 @@ async function main(): Promise<void> {
     const mapped = await productMaps.getByDesign(CONN_A, "PS-1");
     if (!mapped) throw new Error("expected mapping after create");
 
-    const updated = await runProductSyncJob({
+    const callsAfterCreate = calls.length;
+    const skippedExisting = await runProductSyncJob({
       kind: "product.sync",
       connectionId: CONN_A,
       platform: "SHOPIFY",
       designNo: "PS-1",
     });
-    if (updated !== "UPDATED") {
-      throw new Error(`expected UPDATED, got ${updated}`);
+    if (skippedExisting !== "SKIPPED") {
+      throw new Error(`expected SKIPPED for mapped design, got ${skippedExisting}`);
     }
-    if (!calls.some((c) => c.includes("productUpdate"))) {
-      throw new Error("expected productUpdate GraphQL on second sync");
+    if (calls.length !== callsAfterCreate) {
+      throw new Error("second sync must not call Shopify when mapping exists");
+    }
+    if (calls.some((c) => c.includes("productUpdate"))) {
+      throw new Error("mapped product.sync must not call productUpdate");
     }
 
     // Denied path: sync_products off
@@ -752,8 +756,8 @@ async function main(): Promise<void> {
       if ((await runProductSyncJob(regrantJob)) !== "CREATED") {
         throw new Error("re-grant backfill must recreate each deleted product");
       }
-      if ((await runProductSyncJob(regrantJob)) !== "UPDATED") {
-        throw new Error("re-grant retry must update, not duplicate, each product");
+      if ((await runProductSyncJob(regrantJob)) !== "SKIPPED") {
+        throw new Error("re-grant retry must skip already-mapped products");
       }
     }
     if (

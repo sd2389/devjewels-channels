@@ -189,6 +189,7 @@ async function main(): Promise<void> {
   registerDefaultAdapters();
 
   const originalFetch = globalThis.fetch;
+  const graphqlKind: string[] = [];
   globalThis.fetch = (async (_url, init) => {
     const body = typeof init?.body === "string" ? init.body : "";
     // Media attach (must run before productCreate match — substring overlaps)
@@ -209,7 +210,8 @@ async function main(): Promise<void> {
       );
     }
     // productCreate GraphQL
-    if (body.includes("productCreate")) {
+    if (body.includes("productCreate($product")) {
+      graphqlKind.push("create");
       return new Response(
         JSON.stringify({
           data: {
@@ -235,12 +237,31 @@ async function main(): Promise<void> {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
-    // productUpdate / variants bulk (create + re-import update)
+    if (body.includes("productVariantsBulkCreate")) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            productVariantsBulkCreate: {
+              productVariants: [
+                {
+                  id: "gid://shopify/ProductVariant/11",
+                  sku: "JOB-1",
+                  inventoryItem: { id: "gid://shopify/InventoryItem/21" },
+                },
+              ],
+              userErrors: [],
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    // productUpdate / variants bulk (must not run on re-import skip)
     if (
       body.includes("productUpdate") ||
-      body.includes("productVariantsBulkUpdate") ||
-      body.includes("productVariantsBulkCreate")
+      body.includes("productVariantsBulkUpdate")
     ) {
+      graphqlKind.push("update");
       return new Response(
         JSON.stringify({
           data: {
@@ -319,23 +340,43 @@ async function main(): Promise<void> {
       );
     }
 
-    // Re-import must update existing mapping (not duplicate create).
+    const createsAfterFirst = graphqlKind.filter((k) => k === "create").length;
+    if (createsAfterFirst !== 2) {
+      throw new Error(`expected 2 Shopify creates, got ${createsAfterFirst}`);
+    }
+
+    // Re-import must skip mapped designs (no duplicate create, no productUpdate).
     const result2 = await runCatalogImport({
       connectionId: CONN,
       concurrency: 2,
       maxDesigns: 10,
     });
-    if (result2.status !== "completed" || result2.processed !== 2) {
-      throw new Error(`re-import expected 2 processed, got ${JSON.stringify(result2)}`);
+    if (
+      result2.status !== "completed" ||
+      result2.processed !== 0 ||
+      result2.skipped !== 2
+    ) {
+      throw new Error(
+        `re-import expected 0 processed / 2 skipped, got ${JSON.stringify(result2)}`,
+      );
     }
     const mapped2 = await productMaps.getByDesign(CONN, "DJ-1");
     if (!mapped2 || mapped2.external_product_id !== "gid://shopify/Product/1") {
       throw new Error("re-import should keep same product mapping");
     }
-    if (peekMemoryInventoryQueueDepth() !== 2) {
-      throw new Error("catalog re-import must refresh inventory for mapped live + OOS designs");
+    if (peekMemoryInventoryQueueDepth() !== 0) {
+      throw new Error("catalog re-import must not enqueue inventory for already-mapped designs");
     }
-    drainMemoryInventoryQueue();
+    if (graphqlKind.filter((k) => k === "create").length !== createsAfterFirst) {
+      throw new Error("re-import must not call productCreate again");
+    }
+    if (graphqlKind.includes("update")) {
+      throw new Error("re-import must not call productUpdate");
+    }
+    const skipLogs = syncLogs.rows.filter((r) => r.message === "already_exists");
+    if (skipLogs.length < 2) {
+      throw new Error("re-import must log already_exists for mapped designs");
+    }
 
     // Full API-key revoke must deny manual/backfill imports before Shopify work.
     const revokedClient = mockDeverp();

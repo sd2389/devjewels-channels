@@ -86,7 +86,8 @@ export async function handleOrderProcessing(job: OrderProcessingJob): Promise<vo
 export async function handleProductSync(job: ProductSyncJob): Promise<void> {
   ensureAdapters();
 
-  // Full-catalog import when importId is set (connect / manual re-import).
+  // Full-catalog import when importId is set (connect / staff import).
+  // Mapped designs are skipped; only missing products are created.
   if (job.importId) {
     const result = await runCatalogImport({
       connectionId: job.connectionId,

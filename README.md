@@ -153,7 +153,7 @@ Token paste remains under **Advanced**. Re-install updates the same connection c
 4. **Catalog fan-out** — active connections with `sync_products=TRUE` → one `product.sync` job per connection (bounded).
 5. **Workers**
    - Inventory → Shopify `inventorySetQuantities`
-   - Product → pull Django facade → **create** if no `product_mapping`, else **update** (`productUpdate` + variant bulk update/create)
+   - Product → pull Django facade → **create** if no `product_mapping`; **skip** if mapped (`already_exists`)
 6. **Connection flags** — `sync_inventory`, `sync_products` (catalog create/update, default ON), `sync_price`, `sync_orders`.
 7. **Secrets** — `connection.credentials_secret_ref` is `env:VAR`, `sm:ID`, or `vault:<id>` (payload in `channels.vault_secret` or local files). Never log secret values.
 
@@ -161,10 +161,10 @@ Token paste remains under **Advanced**. Re-install updates the same connection c
 
 | Change in DevJewels | Shopify effect |
 |---------------------|----------------|
-| Design create/update (title, price fields, taxonomy, active/archive, …) | Mapped product updated; unmapped design created when it has live jobs |
+| Design create/update (title, price fields, taxonomy, active/archive, …) | **Unmapped** design created; already-mapped Shopify product is left unchanged |
 | New design + first live stock job | Product created (via unmapped inventory → product.sync) |
 | Stock qty change on mapped job | Inventory quantity updated |
-| Manual connect / catalog import | Create or **update** existing mappings (safe re-import) |
+| Manual connect / catalog import | **Create missing only.** Mapped designs are skipped (`already_exists`) — no productUpdate |
 
 ### Seed a local test connection
 

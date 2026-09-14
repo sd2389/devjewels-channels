@@ -1359,7 +1359,7 @@ export function ConnectDashboard() {
               style={{ marginTop: "1rem", opacity: 0.9, lineHeight: 1.5 }}
             >
               {importResult.status === "pending"
-                ? "Import queued. Syncing this customer's entitled catalog in the background."
+                ? "Import queued. Missing designs will be created; products already in this store are skipped."
                 : `Import ${importResult.status}: ${importResult.processed} processed, ${importResult.failed} failed, ${importResult.skipped} skipped of ${importResult.totalDesigns}.`}
             </p>
           ) : null}
