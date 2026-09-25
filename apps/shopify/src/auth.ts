@@ -153,34 +153,43 @@ export async function listShopifyOAuthConfigs(): Promise<ShopifyOAuthConfig[]> {
   const redirectUri = resolveOAuthRedirectUri();
   const envFallback = envFallbackCustomerId();
   const out: ShopifyOAuthConfig[] = [];
-  const seenKeys = new Set<string>();
 
   const add = (payload: {
     apiKey: string;
     apiSecret: string;
     appStoreFallbackCustomerId?: number;
+    /** True for Public App Store credentials — may replace a same-client_id entry. */
+    isPublicApp?: boolean;
   }) => {
     const apiKey = payload.apiKey.trim();
     const apiSecret = payload.apiSecret.trim();
-    if (!apiKey || !apiSecret || seenKeys.has(apiKey)) return;
-    seenKeys.add(apiKey);
+    if (!apiKey || !apiSecret) return;
     const fallback =
       payload.appStoreFallbackCustomerId ??
       (apiKey === DEVJEWELS_CHANNELS_PUBLIC_CLIENT_ID ? envFallback : undefined);
-    out.push({
+    const next: ShopifyOAuthConfig = {
       apiKey,
       apiSecret,
       scopes,
       redirectUri,
       ...(fallback ? { appStoreFallbackCustomerId: fallback } : {}),
-    });
+    };
+    const idx = out.findIndex((c) => c.apiKey === apiKey);
+    if (idx >= 0) {
+      // Same client_id can appear twice in Infisical (SHOPIFY_API_* = Public id
+      // with Custom secret, then SHOPIFY_PUBLIC_*). Only Public credentials may
+      // replace so App Store HMAC is not stuck on the wrong secret.
+      if (payload.isPublicApp) out[idx] = next;
+      return;
+    }
+    out.push(next);
   };
 
   const primaryVault = await readVaultOAuthAppCredentials();
   if (primaryVault) add(primaryVault);
 
   const publicVault = await readPublicVaultOAuthAppCredentials();
-  if (publicVault) add(publicVault);
+  if (publicVault) add({ ...publicVault, isPublicApp: true });
 
   const envKey = optionalProcessEnv("SHOPIFY_API_KEY") || "";
   const envSecret = optionalProcessEnv("SHOPIFY_API_SECRET") || "";
@@ -195,6 +204,7 @@ export async function listShopifyOAuthConfigs(): Promise<ShopifyOAuthConfig[]> {
       apiKey: pubKey,
       apiSecret: pubSecret,
       appStoreFallbackCustomerId: envFallback,
+      isPublicApp: true,
     });
   }
 
@@ -222,7 +232,14 @@ export async function matchShopifyOAuthConfigByHmac(
   query: URLSearchParams,
 ): Promise<ShopifyOAuthConfig | null> {
   const configs = await listShopifyOAuthConfigs();
-  for (const config of configs) {
+  const clientId = query.get("client_id")?.trim() || "";
+  const ordered = clientId
+    ? [
+        ...configs.filter((c) => c.apiKey === clientId),
+        ...configs.filter((c) => c.apiKey !== clientId),
+      ]
+    : configs;
+  for (const config of ordered) {
     if (verifyShopifyOAuthCallbackHmac(query, config.apiSecret)) {
       return config;
     }
