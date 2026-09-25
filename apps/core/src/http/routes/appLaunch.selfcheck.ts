@@ -212,7 +212,10 @@ async function testNoInviteNotConnectedRedirectsInstalled(): Promise<void> {
   });
 }
 
-async function testPublicAppStoreFallbackStartsOauthImmediately(): Promise<void> {
+async function withPublicAppStoreEnv(
+  run: () => Promise<void>,
+  opts?: { collideApiKeyWithPublic?: boolean },
+): Promise<void> {
   const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "channels-app-launch-pub-"));
   const prev = {
     vault: process.env.CHANNELS_VAULT_DIR,
@@ -223,28 +226,21 @@ async function testPublicAppStoreFallbackStartsOauthImmediately(): Promise<void>
     fallback: process.env.SHOPIFY_APP_STORE_FALLBACK_CUSTOMER_ID,
   };
   process.env.CHANNELS_VAULT_DIR = vaultDir;
-  process.env.SHOPIFY_API_KEY = "custom_key";
-  process.env.SHOPIFY_API_SECRET = "custom_secret";
+  if (opts?.collideApiKeyWithPublic) {
+    // Infisical mistake: SHOPIFY_API_KEY set to Public client id + Custom secret.
+    process.env.SHOPIFY_API_KEY = "4238185738d48848640cb7bf46362437";
+    process.env.SHOPIFY_API_SECRET = "custom_secret";
+  } else {
+    process.env.SHOPIFY_API_KEY = "custom_key";
+    process.env.SHOPIFY_API_SECRET = "custom_secret";
+  }
   process.env.SHOPIFY_PUBLIC_API_KEY = "4238185738d48848640cb7bf46362437";
   process.env.SHOPIFY_PUBLIC_API_SECRET = "public_secret";
   process.env.SHOPIFY_APP_STORE_FALLBACK_CUSTOMER_ID = "993";
   setShopifyInviteStoreForTests(createMemoryShopifyInviteStore());
   setShopifyMetaStoreForTests(createMemoryShopifyMetaStore());
   try {
-    const query = signShopifyQuery(
-      { shop: "review-shop.myshopify.com", timestamp: "123" },
-      "public_secret",
-    );
-    const res = await dispatch(new Request(launchUrl(query)));
-    assert.equal(res.status, 302);
-    const loc = new URL(locationOf(res));
-    assert.equal(loc.pathname, "/api/shopify/auth");
-    assert.equal(loc.searchParams.get("customer_id"), "993");
-    assert.equal(loc.searchParams.get("merchant"), "1");
-    assert.equal(
-      loc.searchParams.get("client_id"),
-      "4238185738d48848640cb7bf46362437",
-    );
+    await run();
   } finally {
     setShopifyInviteStoreForTests(null);
     setShopifyMetaStoreForTests(null);
@@ -264,6 +260,40 @@ async function testPublicAppStoreFallbackStartsOauthImmediately(): Promise<void>
     } else delete process.env.SHOPIFY_APP_STORE_FALLBACK_CUSTOMER_ID;
     await fs.rm(vaultDir, { recursive: true, force: true });
   }
+}
+
+async function assertPublicFallbackOauth(queryExtra?: Record<string, string>): Promise<void> {
+  const query = signShopifyQuery(
+    { shop: "review-shop.myshopify.com", timestamp: "123", ...queryExtra },
+    "public_secret",
+  );
+  const res = await dispatch(new Request(launchUrl(query)));
+  assert.equal(res.status, 302);
+  const loc = new URL(locationOf(res));
+  assert.equal(loc.pathname, "/api/shopify/auth");
+  assert.equal(loc.searchParams.get("customer_id"), "993");
+  assert.equal(loc.searchParams.get("merchant"), "1");
+  assert.equal(
+    loc.searchParams.get("client_id"),
+    "4238185738d48848640cb7bf46362437",
+  );
+}
+
+async function testPublicAppStoreFallbackStartsOauthImmediately(): Promise<void> {
+  await withPublicAppStoreEnv(async () => {
+    await assertPublicFallbackOauth();
+  });
+}
+
+async function testPublicSecretWinsWhenApiKeyCollidesWithPublicClientId(): Promise<void> {
+  await withPublicAppStoreEnv(
+    async () => {
+      await assertPublicFallbackOauth({
+        client_id: "4238185738d48848640cb7bf46362437",
+      });
+    },
+    { collideApiKeyWithPublic: true },
+  );
 }
 
 async function testShopWithoutHmacIs401(): Promise<void> {
@@ -287,6 +317,7 @@ async function main(): Promise<void> {
   await testConnectedShopRedirectsToSuccess();
   await testNoInviteNotConnectedRedirectsInstalled();
   await testPublicAppStoreFallbackStartsOauthImmediately();
+  await testPublicSecretWinsWhenApiKeyCollidesWithPublicClientId();
   await testShopWithoutHmacIs401();
   console.log("appLaunch self-check ok");
 }
