@@ -38,6 +38,7 @@ export async function getAppRoot(request: Request): Promise<Response> {
         shop: result.shop,
         customer_id: String(result.customerId),
         merchant: "1",
+        client_id: result.clientId,
       });
       return redirectTo(request, `/api/shopify/auth?${qs.toString()}`);
     }

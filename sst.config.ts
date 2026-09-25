@@ -68,6 +68,11 @@ export default $config({
         process.env.CHANNELS_DASHBOARD_PASSWORD?.trim() || "",
       SHOPIFY_API_KEY: process.env.SHOPIFY_API_KEY?.trim() || "",
       SHOPIFY_API_SECRET: process.env.SHOPIFY_API_SECRET?.trim() || "",
+      SHOPIFY_PUBLIC_API_KEY: process.env.SHOPIFY_PUBLIC_API_KEY?.trim() || "",
+      SHOPIFY_PUBLIC_API_SECRET:
+        process.env.SHOPIFY_PUBLIC_API_SECRET?.trim() || "",
+      SHOPIFY_APP_STORE_FALLBACK_CUSTOMER_ID:
+        process.env.SHOPIFY_APP_STORE_FALLBACK_CUSTOMER_ID?.trim() || "",
       SHOPIFY_API_VERSION: process.env.SHOPIFY_API_VERSION?.trim() || "2025-01",
       SHOPIFY_SCOPES:
         process.env.SHOPIFY_SCOPES?.trim() ||
