@@ -106,7 +106,13 @@ export async function resolveShopifyAppLaunch(
     });
   }
 
-  // App Store / Public install: no Channels invite — still start OAuth immediately.
+  // Public App Store automated install has no Channels invite. Shopify requires
+  // an immediate OAuth redirect (not 401 / not intermediate UI). We start OAuth
+  // with the configured fallback customer so authorize begins; binding still
+  // enforces 1:1 shop↔customer in connectShopifyStore. If that customer is
+  // already bound to a different shop, the merchant callback shows installed
+  // success without stealing the connection — real jewelers install via Channels
+  // (pending invite) so each shop gets its own customer.
   const fallbackCustomerId = resolveAppStoreFallbackCustomerId(matched);
   if (fallbackCustomerId != null) {
     return {

@@ -144,7 +144,16 @@ export async function getShopifyAuthCallback(request: Request): Promise<Response
     if (/invalid or expired oauth state|shop mismatch/i.test(message)) {
       return go(merchantErrorPath("invalid_state"), merchantFlow);
     }
-    if (/already connected|another customer|API key/i.test(message)) {
+    if (/already connected|another customer|API key|already has a channel connection/i.test(message)) {
+      // Public App Store install may OAuth with the shared review fallback customer
+      // after that customer already owns a different shop. Do not steal the binding;
+      // OAuth itself succeeded — merchant finishes via Channels with their customer.
+      if (
+        merchantFlow &&
+        /already has a channel connection/i.test(message)
+      ) {
+        return go("/connect/success?installed=1", true);
+      }
       return go(merchantErrorPath("connect_failed"), merchantFlow);
     }
     console.warn("shopify_oauth_callback_failed", {
