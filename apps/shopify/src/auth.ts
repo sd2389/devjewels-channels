@@ -13,6 +13,16 @@ import { getShopifyMetaStore } from "./meta";
 /** Stable vault id for Partner app Client ID + Secret (operator one-time save). */
 export const SHOPIFY_OAUTH_APP_VAULT_ID = "shopify-oauth-app";
 
+/**
+ * Secondary vault for the Public App Store app while Custom BuffedBubbly
+ * remains primary. App Store install HMAC is signed with this secret.
+ */
+export const SHOPIFY_OAUTH_APP_PUBLIC_VAULT_ID = "shopify-oauth-app-public";
+
+/** DevJewels-Channels Public distribution Client ID (App Store). */
+export const DEVJEWELS_CHANNELS_PUBLIC_CLIENT_ID =
+  "4238185738d48848640cb7bf46362437";
+
 const LOCAL_OAUTH_CALLBACK =
   "http://localhost:3100/api/shopify/auth/callback";
 
@@ -36,6 +46,8 @@ export type ShopifyOAuthConfig = {
   apiSecret: string;
   scopes: string;
   redirectUri: string;
+  /** When set, App Store installs without a pending invite bind to this customer. */
+  appStoreFallbackCustomerId?: number;
 };
 
 export class ShopifyOAuthConfigError extends Error {
@@ -71,48 +83,174 @@ function resolveOAuthRedirectUri(): string {
   return LOCAL_OAUTH_CALLBACK;
 }
 
-async function readVaultOAuthAppCredentials(): Promise<{
+type VaultOAuthPayload = {
   apiKey: string;
   apiSecret: string;
-} | null> {
-  const raw = await tryReadVaultSecret(SHOPIFY_OAUTH_APP_VAULT_ID);
-  if (!raw) return null;
+  appStoreFallbackCustomerId?: number;
+};
+
+function parseVaultOAuthPayload(
+  raw: string,
+  invalidMessage: string,
+): VaultOAuthPayload | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new ShopifyOAuthConfigError(
-      "Shopify app credentials in the dashboard are invalid. Save Client ID and Secret again.",
-    );
+    throw new ShopifyOAuthConfigError(invalidMessage);
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new ShopifyOAuthConfigError(
-      "Shopify app credentials in the dashboard are invalid. Save Client ID and Secret again.",
-    );
+    throw new ShopifyOAuthConfigError(invalidMessage);
   }
   const obj = parsed as Record<string, unknown>;
   const apiKey = typeof obj.apiKey === "string" ? obj.apiKey.trim() : "";
   const apiSecret = typeof obj.apiSecret === "string" ? obj.apiSecret.trim() : "";
   if (!apiKey || !apiSecret) return null;
-  return { apiKey, apiSecret };
+  const fallbackRaw = obj.appStoreFallbackCustomerId ?? obj.fallbackCustomerId;
+  const fallbackCid = Number(fallbackRaw);
+  return {
+    apiKey,
+    apiSecret,
+    ...(Number.isInteger(fallbackCid) && fallbackCid > 0
+      ? { appStoreFallbackCustomerId: fallbackCid }
+      : {}),
+  };
+}
+
+async function readVaultOAuthAppCredentials(): Promise<VaultOAuthPayload | null> {
+  const raw = await tryReadVaultSecret(SHOPIFY_OAUTH_APP_VAULT_ID);
+  if (!raw) return null;
+  return parseVaultOAuthPayload(
+    raw,
+    "Shopify app credentials in the dashboard are invalid. Save Client ID and Secret again.",
+  );
+}
+
+async function readPublicVaultOAuthAppCredentials(): Promise<VaultOAuthPayload | null> {
+  const raw = await tryReadVaultSecret(SHOPIFY_OAUTH_APP_PUBLIC_VAULT_ID);
+  if (!raw) return null;
+  return parseVaultOAuthPayload(
+    raw,
+    "Public Shopify app credentials in the vault are invalid. Re-save Client ID and Secret.",
+  );
+}
+
+function envFallbackCustomerId(): number | undefined {
+  const raw =
+    optionalProcessEnv("SHOPIFY_APP_STORE_FALLBACK_CUSTOMER_ID") || "";
+  const cid = Number(raw);
+  if (!Number.isInteger(cid) || cid <= 0) return undefined;
+  return cid;
+}
+
+/**
+ * Primary (Custom/BuffedBubbly) plus optional Public App Store credentials.
+ * Dedupes by apiKey. Order: vault primary, public vault, env primary, env public.
+ */
+export async function listShopifyOAuthConfigs(): Promise<ShopifyOAuthConfig[]> {
+  const scopes =
+    optionalProcessEnv("SHOPIFY_SCOPES") || DEFAULT_SHOPIFY_SCOPES;
+  const redirectUri = resolveOAuthRedirectUri();
+  const envFallback = envFallbackCustomerId();
+  const out: ShopifyOAuthConfig[] = [];
+  const seenKeys = new Set<string>();
+
+  const add = (payload: {
+    apiKey: string;
+    apiSecret: string;
+    appStoreFallbackCustomerId?: number;
+  }) => {
+    const apiKey = payload.apiKey.trim();
+    const apiSecret = payload.apiSecret.trim();
+    if (!apiKey || !apiSecret || seenKeys.has(apiKey)) return;
+    seenKeys.add(apiKey);
+    const fallback =
+      payload.appStoreFallbackCustomerId ??
+      (apiKey === DEVJEWELS_CHANNELS_PUBLIC_CLIENT_ID ? envFallback : undefined);
+    out.push({
+      apiKey,
+      apiSecret,
+      scopes,
+      redirectUri,
+      ...(fallback ? { appStoreFallbackCustomerId: fallback } : {}),
+    });
+  };
+
+  const primaryVault = await readVaultOAuthAppCredentials();
+  if (primaryVault) add(primaryVault);
+
+  const publicVault = await readPublicVaultOAuthAppCredentials();
+  if (publicVault) add(publicVault);
+
+  const envKey = optionalProcessEnv("SHOPIFY_API_KEY") || "";
+  const envSecret = optionalProcessEnv("SHOPIFY_API_SECRET") || "";
+  if (envKey && envSecret) add({ apiKey: envKey, apiSecret: envSecret });
+
+  const pubKey =
+    optionalProcessEnv("SHOPIFY_PUBLIC_API_KEY") ||
+    DEVJEWELS_CHANNELS_PUBLIC_CLIENT_ID;
+  const pubSecret = optionalProcessEnv("SHOPIFY_PUBLIC_API_SECRET") || "";
+  if (pubKey && pubSecret) {
+    add({
+      apiKey: pubKey,
+      apiSecret: pubSecret,
+      appStoreFallbackCustomerId: envFallback,
+    });
+  }
+
+  if (!out.length) {
+    throw new ShopifyOAuthConfigError(SHOPIFY_OAUTH_NOT_CONFIGURED_MESSAGE);
+  }
+  return out;
 }
 
 /** Vault operator credentials win; env SHOPIFY_API_KEY/SECRET is optional fallback. */
 export async function getShopifyOAuthConfig(): Promise<ShopifyOAuthConfig> {
-  const fromVault = await readVaultOAuthAppCredentials();
-  const apiKey =
-    fromVault?.apiKey || optionalProcessEnv("SHOPIFY_API_KEY") || "";
-  const apiSecret =
-    fromVault?.apiSecret || optionalProcessEnv("SHOPIFY_API_SECRET") || "";
-  const scopes =
-    optionalProcessEnv("SHOPIFY_SCOPES") || DEFAULT_SHOPIFY_SCOPES;
-  const redirectUri = resolveOAuthRedirectUri();
+  return (await listShopifyOAuthConfigs())[0]!;
+}
 
-  if (!apiKey || !apiSecret) {
-    throw new ShopifyOAuthConfigError(SHOPIFY_OAUTH_NOT_CONFIGURED_MESSAGE);
+export async function getShopifyOAuthConfigByClientId(
+  clientId: string,
+): Promise<ShopifyOAuthConfig | null> {
+  const needle = clientId.trim();
+  if (!needle) return null;
+  const configs = await listShopifyOAuthConfigs();
+  return configs.find((c) => c.apiKey === needle) ?? null;
+}
+
+export async function matchShopifyOAuthConfigByHmac(
+  query: URLSearchParams,
+): Promise<ShopifyOAuthConfig | null> {
+  const configs = await listShopifyOAuthConfigs();
+  for (const config of configs) {
+    if (verifyShopifyOAuthCallbackHmac(query, config.apiSecret)) {
+      return config;
+    }
   }
+  return null;
+}
 
-  return { apiKey, apiSecret, scopes, redirectUri };
+export async function saveShopifyPublicOAuthAppCredentials(input: {
+  apiKey: string;
+  apiSecret: string;
+  appStoreFallbackCustomerId?: number;
+}): Promise<ShopifyOAuthPublicStatus> {
+  const payload: Record<string, unknown> = {
+    apiKey: input.apiKey,
+    apiSecret: input.apiSecret,
+  };
+  if (
+    input.appStoreFallbackCustomerId != null &&
+    Number.isInteger(input.appStoreFallbackCustomerId) &&
+    input.appStoreFallbackCustomerId > 0
+  ) {
+    payload.appStoreFallbackCustomerId = input.appStoreFallbackCustomerId;
+  }
+  await writeVaultSecret(payload, SHOPIFY_OAUTH_APP_PUBLIC_VAULT_ID);
+  console.info("shopify_oauth_public_app_saved", {
+    apiKeyLast4: input.apiKey.slice(-4),
+  });
+  return getShopifyOAuthPublicStatus();
 }
 
 export type ShopifyOAuthPublicStatus = {
@@ -207,15 +345,26 @@ export function shopifyWebhookCallbackUrl(): string {
 export async function beginShopifyOAuthInstall(
   shop: string,
   customerId: number,
-  options: { merchantSuccess?: boolean } = {},
+  options: {
+    merchantSuccess?: boolean;
+    config?: ShopifyOAuthConfig;
+    clientId?: string;
+  } = {},
 ): Promise<{
   url: string;
   state: string;
   shopDomain: string;
   customerId: number;
   merchantSuccess: boolean;
+  apiKey: string;
 }> {
-  const config = await getShopifyOAuthConfig();
+  let config = options.config ?? null;
+  if (!config && options.clientId) {
+    config = await getShopifyOAuthConfigByClientId(options.clientId);
+  }
+  if (!config) {
+    config = await getShopifyOAuthConfig();
+  }
   const shopDomain = assertMyshopifyDomain(shop);
   const cid = Number(customerId);
   if (!Number.isInteger(cid) || cid <= 0) {
@@ -235,7 +384,14 @@ export async function beginShopifyOAuthInstall(
   url.searchParams.set("scope", config.scopes);
   url.searchParams.set("redirect_uri", config.redirectUri);
   url.searchParams.set("state", state);
-  return { url: url.toString(), state, shopDomain, customerId: cid, merchantSuccess };
+  return {
+    url: url.toString(),
+    state,
+    shopDomain,
+    customerId: cid,
+    merchantSuccess,
+    apiKey: config.apiKey,
+  };
 }
 
 export function parseCustomerIdFromOAuthState(state: string): number | null {
@@ -303,8 +459,9 @@ export async function exchangeShopifyOAuthCode(input: {
   code: string;
   state: string;
   fetchImpl?: typeof fetch;
+  config?: ShopifyOAuthConfig;
 }): Promise<ShopifyTokenExchangeResult> {
-  const config = await getShopifyOAuthConfig();
+  const config = input.config ?? (await getShopifyOAuthConfig());
   const shopDomain = assertMyshopifyDomain(input.shop);
   const code = input.code.trim();
   if (!code) {

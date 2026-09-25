@@ -2,22 +2,22 @@ import { optionalProcessEnv } from "@/config/serverEnv";
 import {
   beginShopifyOAuthInstall,
   exchangeShopifyOAuthCode,
-  getShopifyOAuthConfig,
+  matchShopifyOAuthConfigByHmac,
   isMerchantOAuthState,
   parseCustomerIdFromOAuthState,
   ShopifyOAuthConfigError,
-  verifyShopifyOAuthCallbackHmac,
 } from "@devjewels-channels/shopify/auth";
 import { connectShopifyStore } from "@/services/connectShopifyService";
 import { json, redirect } from "../response";
 
 /**
- * GET /api/shopify/auth?shop=&customer_id=
+ * GET /api/shopify/auth?shop=&customer_id=&client_id=
  */
 export async function getShopifyAuthStart(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const shop = url.searchParams.get("shop");
   const customerIdRaw = url.searchParams.get("customer_id");
+  const clientId = url.searchParams.get("client_id")?.trim() || "";
   const merchantSuccess = url.searchParams.get("merchant") === "1";
   if (!shop?.trim()) {
     return json({ error: "Missing shop (expected *.myshopify.com)" }, 400);
@@ -32,6 +32,7 @@ export async function getShopifyAuthStart(request: Request): Promise<Response> {
   try {
     const { url: authorizeUrl } = await beginShopifyOAuthInstall(shop, customerId, {
       merchantSuccess,
+      ...(clientId ? { clientId } : {}),
     });
     return redirect(authorizeUrl, 302);
   } catch (err) {
@@ -98,8 +99,8 @@ export async function getShopifyAuthCallback(request: Request): Promise<Response
     merchantFlow ? `/connect/success?shopify_error=${errorCode}` : `/?shopify_error=${errorCode}`;
 
   try {
-    const config = await getShopifyOAuthConfig();
-    if (!verifyShopifyOAuthCallbackHmac(params, config.apiSecret)) {
+    const config = await matchShopifyOAuthConfigByHmac(params);
+    if (!config) {
       return go(merchantErrorPath("invalid_hmac"), merchantFlow);
     }
 
@@ -112,6 +113,7 @@ export async function getShopifyAuthCallback(request: Request): Promise<Response
       shop,
       code,
       state,
+      config,
     });
 
     const result = await connectShopifyStore({
@@ -142,7 +144,16 @@ export async function getShopifyAuthCallback(request: Request): Promise<Response
     if (/invalid or expired oauth state|shop mismatch/i.test(message)) {
       return go(merchantErrorPath("invalid_state"), merchantFlow);
     }
-    if (/already connected|another customer|API key/i.test(message)) {
+    if (/already connected|another customer|API key|already has a channel connection/i.test(message)) {
+      // Public App Store install may OAuth with the shared review fallback customer
+      // after that customer already owns a different shop. Do not steal the binding;
+      // OAuth itself succeeded — merchant finishes via Channels with their customer.
+      if (
+        merchantFlow &&
+        /already has a channel connection/i.test(message)
+      ) {
+        return go("/connect/success?installed=1", true);
+      }
       return go(merchantErrorPath("connect_failed"), merchantFlow);
     }
     console.warn("shopify_oauth_callback_failed", {

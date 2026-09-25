@@ -9,7 +9,7 @@ import {
   handleShopifyShopRedact,
   isShopifyComplianceTopic,
 } from "@/services/shopifyCompliance";
-import { getShopifyOAuthConfig } from "@devjewels-channels/shopify/auth";
+import { getShopifyOAuthConfig, listShopifyOAuthConfigs } from "@devjewels-channels/shopify/auth";
 import {
   headerValue,
   parseShopifyShopDomain,
@@ -43,25 +43,44 @@ async function resolveWebhookSecret(connectionId: string): Promise<string> {
   }
 }
 
+async function complianceSecrets(): Promise<string[]> {
+  const secrets: string[] = [];
+  const seen = new Set<string>();
+  const add = (s: string) => {
+    const t = s.trim();
+    if (!t || seen.has(t)) return;
+    seen.add(t);
+    secrets.push(t);
+  };
+  try {
+    for (const c of await listShopifyOAuthConfigs()) {
+      add(c.apiSecret);
+    }
+  } catch {
+    try {
+      add((await getShopifyOAuthConfig()).apiSecret);
+    } catch {
+      add(process.env.SHOPIFY_API_SECRET || "");
+    }
+  }
+  add(process.env.SHOPIFY_PUBLIC_API_SECRET || "");
+  return secrets;
+}
+
 async function handleCompliancePost(
   rawBody: string,
   headers: Record<string, string>,
   topic: string,
 ): Promise<Response> {
   const shopDomain = parseShopifyShopDomain(headers);
-  let apiSecret = "";
-  try {
-    apiSecret = (await getShopifyOAuthConfig()).apiSecret;
-  } catch {
-    apiSecret = (process.env.SHOPIFY_API_SECRET || "").trim();
-  }
   const hmacHeader =
     headerValue(headers, "x-shopify-hmac-sha256") ||
     headerValue(headers, "X-Shopify-Hmac-Sha256");
-  if (
-    !apiSecret ||
-    !verifyShopifyWebhookHmac({ rawBody, hmacHeader, secret: apiSecret })
-  ) {
+  const secrets = await complianceSecrets();
+  const ok = secrets.some((secret) =>
+    verifyShopifyWebhookHmac({ rawBody, hmacHeader, secret }),
+  );
+  if (!ok) {
     console.warn("shopify_compliance_hmac_rejected", { topic, shopDomain });
     return json({ error: "Unauthorized" }, 401);
   }
