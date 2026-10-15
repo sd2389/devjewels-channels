@@ -408,13 +408,7 @@ export async function runProductSyncJob(
           externalInventoryItemId: variant.externalInventoryItemId ?? null,
         });
       }
-      for (const stale of removeVariants) {
-        await variantStore.deleteByDesignJob(
-          job.connectionId,
-          designNo,
-          stale.jobNo,
-        );
-      }
+      // Keep stale variant_mapping rows for delayed Shopify order reverse-lookup.
       resultVariants = updated.variants;
       outcome = "UPDATED";
       await writeSyncLog({

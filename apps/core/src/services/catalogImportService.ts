@@ -310,13 +310,7 @@ async function importOneDesign(input: {
         externalInventoryItemId: variant.externalInventoryItemId ?? null,
       });
     }
-    for (const stale of removeVariants) {
-      await variantStore.deleteByDesignJob(
-        input.connectionId,
-        input.designNo,
-        stale.jobNo,
-      );
-    }
+    // Keep stale variant_mapping rows for delayed Shopify order reverse-lookup.
 
     if (input.canViewInventory && input.syncInventory) {
       for (const variant of result.variants) {

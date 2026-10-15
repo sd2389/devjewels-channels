@@ -73,6 +73,28 @@ async function main(): Promise<void> {
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
+      if (body.includes("productVariantsForReclaim")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              product: {
+                id: "gid://shopify/Product/orphan",
+                variants: {
+                  nodes: [
+                    {
+                      id: "gid://shopify/ProductVariant/orphan-a",
+                      sku: "JOB-A",
+                      selectedOptions: [{ name: "Job", value: "JOB-A" }],
+                      inventoryItem: { id: "gid://shopify/InventoryItem/orphan-a" },
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       if (body.includes("productUpdate") || body.includes("productVariantsBulk")) {
         return new Response(
           JSON.stringify({

@@ -395,11 +395,12 @@ function escapeShopifySearchValue(raw: string): string {
 
 /**
  * Find an existing DevJewels Shopify product for design_no.
- * Prefer identity tag; also match title+vendor and metafield (orphan recovery).
+ * Prefer identity tag; also match design/titleline titles + metafield (orphan recovery).
  */
 export async function findShopifyProductByDesignNo(
   client: ShopifyAdminClient,
   designNo: string,
+  options?: { titleHint?: string },
 ): Promise<string | null> {
   const key = normalizeDesignNoKey(designNo);
   if (!key) return null;
@@ -407,8 +408,13 @@ export async function findShopifyProductByDesignNo(
   const vendor = escapeShopifySearchValue(DEVJEWELS_SHOPIFY_VENDOR);
   const title = escapeShopifySearchValue(designNo.trim());
   const tagQ = escapeShopifySearchValue(tag);
-  const query =
-    `vendor:"${vendor}" AND (tag:"${tagQ}" OR title:"${title}")`;
+  const titleHint = String(options?.titleHint || "").trim();
+  const titleClauses = [`tag:"${tagQ}"`, `title:"${title}"`];
+  if (titleHint && normalizeDesignNoKey(titleHint) !== key) {
+    titleClauses.push(`title:"${escapeShopifySearchValue(titleHint)}"`);
+  }
+  // Legacy orphans often have titleline titles + design_no metafield only.
+  const query = `vendor:"${vendor}" AND (${titleClauses.join(" OR ")})`;
 
   const result = await client.graphql<ProductsFindByDesignData>(
     PRODUCTS_FIND_BY_DESIGN,
@@ -420,6 +426,7 @@ export async function findShopifyProductByDesignNo(
     .map((e) => e?.node)
     .filter((n): n is NonNullable<typeof n> => Boolean(n?.id));
 
+  // Metafield is authoritative; design_no title is a fallback for older imports.
   const matches = nodes.filter((n) => {
     const mf = normalizeDesignNoKey(String(n.metafield?.value || ""));
     if (mf && mf === key) return true;
@@ -444,6 +451,79 @@ export async function findShopifyProductByDesignNo(
   return matches[0]?.id ?? null;
 }
 
+const PRODUCT_VARIANTS_FOR_RECLAIM = /* GraphQL */ `
+  query productVariantsForReclaim($id: ID!) {
+    product(id: $id) {
+      id
+      variants(first: 100) {
+        nodes {
+          id
+          sku
+          selectedOptions {
+            name
+            value
+          }
+          inventoryItem {
+            id
+          }
+        }
+      }
+    }
+  }
+`;
+
+type ProductVariantsForReclaimData = {
+  product?: {
+    id?: string;
+    variants?: {
+      nodes?: Array<{
+        id?: string;
+        sku?: string | null;
+        selectedOptions?: Array<{ name?: string | null; value?: string | null }> | null;
+        inventoryItem?: { id?: string } | null;
+      } | null> | null;
+    } | null;
+  } | null;
+};
+
+/** Load Job/SKU variants on a reclaimed product so retries update instead of re-create. */
+export async function listShopifyVariantsForReclaim(
+  client: ShopifyAdminClient,
+  productId: string,
+): Promise<
+  Array<{
+    jobNo: string;
+    externalVariantId: string;
+    externalInventoryItemId?: string;
+  }>
+> {
+  const result = await client.graphql<ProductVariantsForReclaimData>(
+    PRODUCT_VARIANTS_FOR_RECLAIM,
+    { id: productId },
+  );
+  throwGraphqlErrors(result.errors);
+  const nodes = result.data?.product?.variants?.nodes ?? [];
+  const out: Array<{
+    jobNo: string;
+    externalVariantId: string;
+    externalInventoryItemId?: string;
+  }> = [];
+  for (const n of nodes) {
+    if (!n?.id) continue;
+    const jobOpt = (n.selectedOptions || []).find(
+      (o) => String(o?.name || "").trim().toLowerCase() === "job",
+    );
+    const jobNo = String(jobOpt?.value || n.sku || "").trim();
+    if (!jobNo) continue;
+    out.push({
+      jobNo,
+      externalVariantId: n.id,
+      externalInventoryItemId: n.inventoryItem?.id || undefined,
+    });
+  }
+  return out;
+}
+
 export async function createShopifyProduct(
   client: ShopifyAdminClient,
   input: CreateProductInput,
@@ -454,7 +534,9 @@ export async function createShopifyProduct(
 
   // Root fix: never create a second Shopify product for the same design_no.
   // Retries after a failed create leave orphans; reclaim the fullest match.
-  const existingId = await findShopifyProductByDesignNo(client, input.designNo);
+  const existingId = await findShopifyProductByDesignNo(client, input.designNo, {
+    titleHint: input.title,
+  });
   if (existingId) {
     console.info("shopify_product_create_reclaim", {
       connectionId: input.connectionId,
@@ -464,10 +546,14 @@ export async function createShopifyProduct(
     if (input.onExternalProductId) {
       await input.onExternalProductId(existingId);
     }
+    const existingVariants = await listShopifyVariantsForReclaim(
+      client,
+      existingId,
+    );
     return updateShopifyProduct(client, {
       ...input,
       externalProductId: existingId,
-      existingVariants: [],
+      existingVariants,
     });
   }
 
@@ -635,6 +721,8 @@ export async function updateShopifyProduct(
   }
 
   // Delete after desired variants exist so the product never drops to zero variants.
+  // Keep Channels variant_mapping rows for delayed order reverse-lookup; Shopify
+  // delete is best-effort (already-removed variants must not fail the sync).
   const removeIds = [
     ...new Set(
       (input.removeVariants ?? [])
@@ -655,10 +743,14 @@ export async function updateShopifyProduct(
         variantsIds: safeRemove,
       });
       throwGraphqlErrors(deleted.errors);
-      throwUserErrors(
-        deleted.data?.productVariantsBulkDelete?.userErrors,
-        "productVariantsBulkDelete",
+      const deleteErrors =
+        deleted.data?.productVariantsBulkDelete?.userErrors ?? [];
+      const fatal = deleteErrors.filter(
+        (e) => !/not found|does not exist|already been deleted/i.test(e.message),
       );
+      if (fatal.length) {
+        throwUserErrors(fatal, "productVariantsBulkDelete");
+      }
     }
   }
 
