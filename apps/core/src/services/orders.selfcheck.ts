@@ -466,6 +466,76 @@ async function main(): Promise<void> {
     throw new Error("expected webhook_event status=processed");
   }
 
+  // 11) Real Shopify checkout shape: SKU + variant_id, no line properties → mapping resolve
+  const {
+    createMemoryVariantMappingStore,
+    setVariantMappingStoreForTests,
+  } = await import("./variantMappings");
+  setVariantMappingStoreForTests(
+    createMemoryVariantMappingStore([
+      {
+        id: "vm-1",
+        connection_id: CONN,
+        design_no: "DJ-ORD",
+        job_no: "JOB-9",
+        external_variant_id: "gid://shopify/ProductVariant/55",
+        external_inventory_item_id: "gid://shopify/InventoryItem/55",
+      },
+    ]),
+  );
+  const mappedPayload = {
+    id: 9002,
+    admin_graphql_api_id: "gid://shopify/Order/9002",
+    currency: "USD",
+    email: "buyer@example.com",
+    line_items: [
+      { id: 2, variant_id: 55, sku: "JOB-9", quantity: 1 },
+      { id: 3, sku: "STORE-OWN-SKU", quantity: 1 },
+    ],
+  };
+  const claimMapped = await webhooks.claim({
+    connectionId: CONN,
+    platform: "SHOPIFY",
+    externalEventId: "evt-mapped",
+    topic: "orders/create",
+    payloadRef: JSON.stringify(mappedPayload),
+  });
+  let reservedDesign = "";
+  setDeverpClientForTests(
+    unusedClient({
+      async getEntitlements() {
+        return baseEntitlements({ permissions: { can_place_orders: true } });
+      },
+      async reserveOrder(payload) {
+        if (payload.lines.length !== 1) {
+          throw new Error("must reserve only DevJewels mapped lines");
+        }
+        reservedDesign = payload.lines[0]?.design_no || "";
+        return {
+          order_id: 43,
+          order_number: "ORD2-MAP",
+          duplicate: false,
+          platform: "SHOPIFY",
+          external_order_id: payload.external_order_id,
+          connection_id: payload.connection_id,
+        };
+      },
+    }),
+  );
+  const mappedOk = await runOrderProcessingJob({
+    kind: "order.process",
+    connectionId: CONN,
+    platform: "SHOPIFY",
+    webhookEventId: claimMapped.row.id,
+  });
+  if (mappedOk !== "SUCCESS") {
+    throw new Error(`expected SUCCESS from variant mapping, got ${mappedOk}`);
+  }
+  if (reservedDesign !== "DJ-ORD") {
+    throw new Error(`expected design from variant_mapping, got ${reservedDesign}`);
+  }
+  setVariantMappingStoreForTests(null);
+
   setConnectionStoreForTests(null);
   setWebhookEventStoreForTests(null);
   setSyncLogStoreForTests(null);

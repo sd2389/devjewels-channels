@@ -154,7 +154,8 @@ Token paste remains under **Advanced**. Re-install updates the same connection c
 5. **Workers**
    - Inventory → Shopify `inventorySetQuantities`
    - Product → pull Django facade → **create** if no `product_mapping`, else **update** (`productUpdate` + variant bulk update/create)
-6. **Connection flags** — `sync_inventory`, `sync_products` (catalog create/update, default ON), `sync_price`, `sync_orders`.
+6. **Connection flags** — `sync_inventory`, `sync_products` (catalog create/update, default ON), `sync_price`, `sync_orders` (ON when the Customer API key has `can_place_orders` — Shopify `orders/create` then auto-creates a pending DevJewels order via `orders/reserve`).
+7. **Live inventory + auto orders plan** — see backend `docs/CHANNELS_LIVE_INVENTORY_AND_ORDERS.md`. Website sales publish `inventory.updated` qty 0 immediately; e2e: `npm run selfcheck:shopify-live-e2e` in `apps/core`.
 7. **Secrets** — `connection.credentials_secret_ref` is `env:VAR`, `sm:ID`, or `vault:<id>` (payload in `channels.vault_secret` or local files). Never log secret values.
 
 ### What auto-syncs now

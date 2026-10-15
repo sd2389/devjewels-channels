@@ -87,6 +87,8 @@ CREATE INDEX IF NOT EXISTS variant_mapping_job_idx
   ON channels.variant_mapping (job_no);
 CREATE INDEX IF NOT EXISTS variant_mapping_design_job_idx
   ON channels.variant_mapping (design_no, job_no);
+CREATE INDEX IF NOT EXISTS variant_mapping_external_variant_idx
+  ON channels.variant_mapping (connection_id, external_variant_id);
 
 CREATE TABLE IF NOT EXISTS channels.sync_log (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),

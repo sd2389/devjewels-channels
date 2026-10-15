@@ -214,6 +214,15 @@ function installShopifyFetch(calls: string[]): typeof fetch {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
+    if (
+      body.includes("productsFindByDesign") ||
+      (body.includes("products(first:") && body.includes("metafield"))
+    ) {
+      return new Response(
+        JSON.stringify({ data: { products: { edges: [] } } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
     if (body.includes("productCreate")) {
       return new Response(
         JSON.stringify({
@@ -243,7 +252,8 @@ function installShopifyFetch(calls: string[]): typeof fetch {
     if (
       body.includes("productUpdate") ||
       body.includes("productVariantsBulkUpdate") ||
-      body.includes("productVariantsBulkCreate")
+      body.includes("productVariantsBulkCreate") ||
+      body.includes("productVariantsBulkDelete")
     ) {
       return new Response(
         JSON.stringify({
@@ -270,6 +280,9 @@ function installShopifyFetch(calls: string[]): typeof fetch {
                   inventoryItem: { id: "gid://shopify/InventoryItem/99" },
                 },
               ],
+              userErrors: [],
+            },
+            productVariantsBulkDelete: {
               userErrors: [],
             },
           },

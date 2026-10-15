@@ -18,6 +18,10 @@ import { resolveChannelVariantPrice } from "@/services/channelUnitPrice";
 import { getDesignMarkup } from "@/services/connectionDesignMarkups";
 import { resolveDesignImageUrls } from "@/services/designImageUrls";
 import { resolveDesignShopifyTaxonomy } from "@/services/designShopifyTaxonomy";
+import {
+  resolveChannelInventoryJobs,
+  staleVariantMappingsToRemove,
+} from "@/services/channelInventoryJobs";
 import { detailsFromInventoryJob } from "@/services/jobVariantDetails";
 import {
   getProductMappingStore,
@@ -274,11 +278,13 @@ export async function runProductSyncJob(
   const inventory = canViewInventory
     ? await deverpClient.getInventory(designNo)
     : { jobs: [] as Array<{ job_no?: string; totamt?: string | number }> };
-  const jobs = (inventory.jobs || []).filter((j) => String(j.job_no || "").trim());
-  if (jobs.length === 0) {
-    // Still create a single placeholder variant so the product exists; qty 0.
-    jobs.push({ job_no: designNo, totamt: defaultPrice });
-  }
+  // Live jobs only; OOS → single design_no placeholder. Dedupes upstream duplicates.
+  const resolved = resolveChannelInventoryJobs(
+    designNo,
+    canViewInventory ? inventory.jobs : [],
+    defaultPrice,
+  );
+  const jobs = resolved.jobs;
 
   const designOverrideRow = await getDesignMarkup(job.connectionId, designNo);
   const designMarkup = designOverrideRow
@@ -306,7 +312,7 @@ export async function runProductSyncJob(
       jobNo,
       sku: jobNo,
       price: unitPrice,
-      quantity: canViewInventory && jobNo !== designNo ? 1 : 0,
+      quantity: canViewInventory && !resolved.outOfStock ? 1 : 0,
       details: detailsFromInventoryJob(j as Record<string, unknown>, category),
     });
   }
@@ -346,12 +352,15 @@ export async function runProductSyncJob(
     }>;
 
     if (existing?.external_product_id) {
+      const allMapped = await variantStore.listByDesign(
+        job.connectionId,
+        designNo,
+      );
       const existingVariants = [];
       for (const v of variants) {
-        const mapped = await variantStore.getByDesignJob(
-          job.connectionId,
-          designNo,
-          v.jobNo,
+        const mapped = allMapped.find(
+          (m) =>
+            m.job_no.trim().toUpperCase() === v.jobNo.trim().toUpperCase(),
         );
         if (mapped) {
           existingVariants.push({
@@ -361,6 +370,15 @@ export async function runProductSyncJob(
           });
         }
       }
+      const removeVariants = staleVariantMappingsToRemove({
+        designNo,
+        desiredJobNos: variants.map((v) => v.jobNo),
+        mapped: allMapped.map((m) => ({
+          jobNo: m.job_no,
+          externalVariantId: m.external_variant_id,
+          externalInventoryItemId: m.external_inventory_item_id,
+        })),
+      });
 
       const updated = await adapter.updateProduct({
         connectionId: job.connectionId,
@@ -373,6 +391,7 @@ export async function runProductSyncJob(
         tags,
         variants,
         existingVariants,
+        removeVariants,
       });
 
       await upsertProductMapping({
@@ -389,6 +408,7 @@ export async function runProductSyncJob(
           externalInventoryItemId: variant.externalInventoryItemId ?? null,
         });
       }
+      // Keep stale variant_mapping rows for delayed Shopify order reverse-lookup.
       resultVariants = updated.variants;
       outcome = "UPDATED";
       await writeSyncLog({
@@ -397,7 +417,7 @@ export async function runProductSyncJob(
         jobType: "product",
         status: "SUCCESS",
         designNo,
-        message: `updated variants=${updated.variants.length}`,
+        message: `updated variants=${updated.variants.length} removed=${removeVariants.length}`,
       });
     } else {
       const created = await adapter.createProduct({
@@ -409,6 +429,14 @@ export async function runProductSyncJob(
         productType,
         tags,
         variants,
+        // Map as soon as Shopify returns a product id (shell), before variants/media.
+        onExternalProductId: async (externalProductId) => {
+          await upsertProductMapping({
+            connectionId: job.connectionId,
+            designNo,
+            externalProductId,
+          });
+        },
       });
 
       await upsertProductMapping({

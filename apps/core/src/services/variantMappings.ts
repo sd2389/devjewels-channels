@@ -19,7 +19,24 @@ export type VariantMappingStore = {
     designNo: string,
     jobNo: string,
   ): Promise<VariantMappingRow | null>;
+  getByExternalVariantId(
+    connectionId: string,
+    externalVariantId: string,
+  ): Promise<VariantMappingRow | null>;
+  getByJobNo(
+    connectionId: string,
+    jobNo: string,
+  ): Promise<VariantMappingRow | null>;
+  listByDesign(
+    connectionId: string,
+    designNo: string,
+  ): Promise<VariantMappingRow[]>;
   deleteByDesign(connectionId: string, designNo: string): Promise<number>;
+  deleteByDesignJob(
+    connectionId: string,
+    designNo: string,
+    jobNo: string,
+  ): Promise<number>;
   upsert(input: {
     connectionId: string;
     designNo: string;
@@ -55,12 +72,100 @@ function pgStore(db: SqlClient): VariantMappingStore {
       return result.rows[0] ?? null;
     },
 
+    async getByExternalVariantId(connectionId, externalVariantId) {
+      const gid = String(externalVariantId || "").trim();
+      if (!gid) return null;
+      const result = await db.query<{
+        id: string;
+        connection_id: string;
+        design_no: string;
+        job_no: string;
+        external_variant_id: string;
+        external_inventory_item_id: string | null;
+      }>(
+        `SELECT id::text AS id,
+                connection_id::text AS connection_id,
+                design_no,
+                job_no,
+                external_variant_id,
+                external_inventory_item_id
+         FROM ${CHANNELS_SCHEMA}.variant_mapping
+         WHERE connection_id = $1::uuid
+           AND external_variant_id = $2
+         LIMIT 1`,
+        [connectionId, gid],
+      );
+      return result.rows[0] ?? null;
+    },
+
+    async getByJobNo(connectionId, jobNo) {
+      const key = String(jobNo || "").trim();
+      if (!key) return null;
+      const result = await db.query<{
+        id: string;
+        connection_id: string;
+        design_no: string;
+        job_no: string;
+        external_variant_id: string;
+        external_inventory_item_id: string | null;
+      }>(
+        `SELECT id::text AS id,
+                connection_id::text AS connection_id,
+                design_no,
+                job_no,
+                external_variant_id,
+                external_inventory_item_id
+         FROM ${CHANNELS_SCHEMA}.variant_mapping
+         WHERE connection_id = $1::uuid
+           AND upper(job_no) = upper($2)
+         ORDER BY updated_at DESC NULLS LAST, id DESC
+         LIMIT 1`,
+        [connectionId, key],
+      );
+      return result.rows[0] ?? null;
+    },
+
+    async listByDesign(connectionId, designNo) {
+      const result = await db.query<{
+        id: string;
+        connection_id: string;
+        design_no: string;
+        job_no: string;
+        external_variant_id: string;
+        external_inventory_item_id: string | null;
+      }>(
+        `SELECT id::text AS id,
+                connection_id::text AS connection_id,
+                design_no,
+                job_no,
+                external_variant_id,
+                external_inventory_item_id
+         FROM ${CHANNELS_SCHEMA}.variant_mapping
+         WHERE connection_id = $1::uuid
+           AND upper(replace(design_no, ' ', '')) = upper(replace($2, ' ', ''))
+         ORDER BY job_no ASC`,
+        [connectionId, designNo],
+      );
+      return result.rows;
+    },
+
     async deleteByDesign(connectionId, designNo) {
       const result = await db.query(
         `DELETE FROM ${CHANNELS_SCHEMA}.variant_mapping
          WHERE connection_id = $1::uuid
            AND upper(replace(design_no, ' ', '')) = upper(replace($2, ' ', ''))`,
         [connectionId, designNo],
+      );
+      return result.rowCount ?? 0;
+    },
+
+    async deleteByDesignJob(connectionId, designNo, jobNo) {
+      const result = await db.query(
+        `DELETE FROM ${CHANNELS_SCHEMA}.variant_mapping
+         WHERE connection_id = $1::uuid
+           AND upper(replace(design_no, ' ', '')) = upper(replace($2, ' ', ''))
+           AND upper(job_no) = upper($3)`,
+        [connectionId, designNo, jobNo],
       );
       return result.rowCount ?? 0;
     },
@@ -115,6 +220,38 @@ export function createMemoryVariantMappingStore(
     async getByDesignJob(connectionId, designNo, jobNo) {
       return rows.get(key(connectionId, designNo, jobNo)) ?? null;
     },
+    async getByExternalVariantId(connectionId, externalVariantId) {
+      const gid = String(externalVariantId || "").trim();
+      if (!gid) return null;
+      for (const row of rows.values()) {
+        if (
+          row.connection_id === connectionId &&
+          row.external_variant_id === gid
+        ) {
+          return row;
+        }
+      }
+      return null;
+    },
+    async getByJobNo(connectionId, jobNo) {
+      const want = String(jobNo || "").trim().toUpperCase();
+      if (!want) return null;
+      for (const row of rows.values()) {
+        if (
+          row.connection_id === connectionId &&
+          row.job_no.trim().toUpperCase() === want
+        ) {
+          return row;
+        }
+      }
+      return null;
+    },
+    async listByDesign(connectionId, designNo) {
+      const prefix = `${connectionId}|${designNo.replace(/\s+/g, "").toUpperCase()}|`;
+      return [...rows.values()]
+        .filter((r) => key(r.connection_id, r.design_no, r.job_no).startsWith(prefix))
+        .sort((a, b) => a.job_no.localeCompare(b.job_no));
+    },
     async deleteByDesign(connectionId, designNo) {
       const prefix = `${connectionId}|${designNo.replace(/\s+/g, "").toUpperCase()}|`;
       let deleted = 0;
@@ -124,6 +261,9 @@ export function createMemoryVariantMappingStore(
         }
       }
       return deleted;
+    },
+    async deleteByDesignJob(connectionId, designNo, jobNo) {
+      return rows.delete(key(connectionId, designNo, jobNo)) ? 1 : 0;
     },
     async upsert(input) {
       const k = key(input.connectionId, input.designNo, input.jobNo);

@@ -27,7 +27,10 @@
     "selfcheck:shopify-install-nav": "npx --yes tsx \"src/app/(dashboard)/shopifyInstallNav.selfcheck.ts\"",
     "selfcheck:shopify-compliance": "npx --yes tsx src/services/shopifyCompliance.selfcheck.ts",
     "selfcheck:design-markup": "npx --yes tsx src/services/connectionDesignMarkups.selfcheck.ts",
-    "selfcheck:job-details": "npx --yes tsx src/services/jobVariantDetails.selfcheck.ts"
+    "selfcheck:job-details": "npx --yes tsx src/services/jobVariantDetails.selfcheck.ts",
+    "selfcheck:channel-inventory-jobs": "npx --yes tsx src/services/channelInventoryJobs.selfcheck.ts",
+    "selfcheck:channel-order-lines": "npx --yes tsx src/services/channelOrderLineResolve.selfcheck.ts",
+    "selfcheck:shopify-live-e2e": "npx --yes tsx src/services/shopifyLivePath.e2e.selfcheck.ts"
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "^3.787.0",

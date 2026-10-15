@@ -39,12 +39,62 @@ async function main(): Promise<void> {
   }
 
   const calls: string[] = [];
+  let findHits = 0;
   const client = createShopifyClient({
     shopDomain: "x.myshopify.com",
     accessToken: "shpat_x",
     fetchImpl: (async (_url, init) => {
       calls.push(typeof init?.body === "string" ? init.body : "");
       const body = typeof init?.body === "string" ? init.body : "";
+      if (body.includes("productsFindByDesign") || body.includes("products(first:")) {
+        findHits += 1;
+        // First create: no existing product. Later reclaim test seeds a hit.
+        const reclaim = findHits >= 2;
+        return new Response(
+          JSON.stringify({
+            data: {
+              products: {
+                edges: reclaim
+                  ? [
+                      {
+                        node: {
+                          id: "gid://shopify/Product/orphan",
+                          title: "D1",
+                          createdAt: "2026-01-01T00:00:00Z",
+                          totalVariants: 4,
+                          metafield: { value: "D1" },
+                        },
+                      },
+                    ]
+                  : [],
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (body.includes("productVariantsForReclaim")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              product: {
+                id: "gid://shopify/Product/orphan",
+                variants: {
+                  nodes: [
+                    {
+                      id: "gid://shopify/ProductVariant/orphan-a",
+                      sku: "JOB-A",
+                      selectedOptions: [{ name: "Job", value: "JOB-A" }],
+                      inventoryItem: { id: "gid://shopify/InventoryItem/orphan-a" },
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       if (body.includes("productUpdate") || body.includes("productVariantsBulk")) {
         return new Response(
           JSON.stringify({
@@ -105,21 +155,50 @@ async function main(): Promise<void> {
     }) as typeof fetch,
   });
 
+  let earlyMapped: string | null = null;
   const created = await createShopifyProduct(client, {
     connectionId: "c",
     designNo: "D1",
     title: "D1",
     variants: [{ jobNo: "JOB-A", price: 10, quantity: 1 }],
+    onExternalProductId: async (id) => {
+      earlyMapped = id;
+    },
   });
   if (created.externalProductId !== "gid://shopify/Product/9") {
     throw new Error("product id mismatch");
   }
+  if (earlyMapped !== "gid://shopify/Product/9") {
+    throw new Error("expected onExternalProductId before variants finish");
+  }
   if (created.variants[0]?.externalInventoryItemId !== "gid://shopify/InventoryItem/9") {
     throw new Error("inventory item id mismatch");
   }
-  if (calls.length !== 2) throw new Error("expected create + variant graphql calls");
-  if (!calls[0]?.includes('"name":"Job"') && !calls[0]?.includes("Job")) {
+  // find + productCreate + variants
+  if (calls.length !== 3) {
+    throw new Error(`expected find+create+variant graphql calls, got ${calls.length}`);
+  }
+  if (!calls[1]?.includes('"name":"Job"') && !calls[1]?.includes("Job")) {
     throw new Error("single-variant create must still send a Job product option");
+  }
+  if (!calls[1]?.includes("dj_design:D1")) {
+    throw new Error("create must attach design identity tag");
+  }
+
+  // Retry path: existing orphan must update, not productCreate again.
+  const createCallsBefore = calls.filter((b) => b.includes("productCreate(")).length;
+  const reclaimed = await createShopifyProduct(client, {
+    connectionId: "c",
+    designNo: "D1",
+    title: "D1",
+    variants: [{ jobNo: "JOB-A", price: 10, quantity: 1 }],
+  });
+  if (reclaimed.externalProductId !== "gid://shopify/Product/orphan") {
+    throw new Error("expected reclaim of existing Shopify product");
+  }
+  const createCallsAfter = calls.filter((b) => b.includes("productCreate(")).length;
+  if (createCallsAfter !== createCallsBefore) {
+    throw new Error("reclaim must not call productCreate again");
   }
 
   const { updateShopifyProduct } = await import("./products");
