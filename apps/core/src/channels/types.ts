@@ -65,6 +65,11 @@ export type CreateProductInput = {
   productType?: string;
   /** Shopify tags — collection / subcategory / producttype. */
   tags?: string[];
+  /**
+   * Persist external product id as soon as the platform shell exists
+   * (before variants/media). Prevents orphan duplicates on retry.
+   */
+  onExternalProductId?: (externalProductId: string) => Promise<void>;
   /** Variants keyed by job_no for mapping. */
   variants: Array<{
     jobNo: string;
@@ -90,6 +95,15 @@ export type UpdateProductInput = CreateProductInput & {
   externalProductId: string;
   /** Existing variant mappings (job_no → external ids). Missing jobs are created. */
   existingVariants?: Array<{
+    jobNo: string;
+    externalVariantId: string;
+    externalInventoryItemId?: string;
+  }>;
+  /**
+   * Variants to remove (OOS design_no placeholder after live stock arrives,
+   * or sold jobs no longer in the Customer API inventory feed).
+   */
+  removeVariants?: Array<{
     jobNo: string;
     externalVariantId: string;
     externalInventoryItemId?: string;

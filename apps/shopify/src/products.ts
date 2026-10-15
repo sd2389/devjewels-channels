@@ -132,8 +132,20 @@ export function jobDetailsDescriptionHtml(
   return lines.join("\n");
 }
 
+/** Stable Shopify tag for design lookup (retries / orphan recovery). */
+export function designIdentityTag(designNo: string): string {
+  return `dj_design:${normalizeDesignNoKey(designNo)}`;
+}
+
+export function normalizeDesignNoKey(designNo: string): string {
+  return String(designNo || "")
+    .replace(/\s+/g, "")
+    .toUpperCase();
+}
+
 /** productType + tags for ProductCreateInput / ProductUpdateInput (skip empties). */
 function shopifyTaxonomyFields(input: {
+  designNo?: string;
   productType?: string;
   tags?: string[];
 }): Record<string, unknown> {
@@ -143,6 +155,13 @@ function shopifyTaxonomyFields(input: {
   const tags = (input.tags || [])
     .map((t) => String(t || "").trim())
     .filter(Boolean);
+  const designNo = String(input.designNo || "").trim();
+  if (designNo) {
+    const identity = designIdentityTag(designNo);
+    if (!tags.some((t) => t.toLowerCase() === identity.toLowerCase())) {
+      tags.push(identity);
+    }
+  }
   if (tags.length) out.tags = tags;
   return out;
 }
@@ -211,6 +230,17 @@ const PRODUCT_VARIANTS_BULK_UPDATE = /* GraphQL */ `
           id
         }
       }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+const PRODUCT_VARIANTS_BULK_DELETE = /* GraphQL */ `
+  mutation productVariantsBulkDelete($productId: ID!, $variantsIds: [ID!]!) {
+    productVariantsBulkDelete(productId: $productId, variantsIds: $variantsIds) {
       userErrors {
         field
         message
@@ -327,12 +357,118 @@ function matchVariants(
   });
 }
 
+const PRODUCTS_FIND_BY_DESIGN = /* GraphQL */ `
+  query productsFindByDesign($query: String!) {
+    products(first: 25, query: $query) {
+      edges {
+        node {
+          id
+          title
+          createdAt
+          totalVariants
+          metafield(namespace: "devjewels", key: "design_no") {
+            value
+          }
+        }
+      }
+    }
+  }
+`;
+
+type ProductsFindByDesignData = {
+  products?: {
+    edges?: Array<{
+      node?: {
+        id?: string;
+        title?: string;
+        createdAt?: string;
+        totalVariants?: number | null;
+        metafield?: { value?: string | null } | null;
+      } | null;
+    } | null>;
+  } | null;
+};
+
+function escapeShopifySearchValue(raw: string): string {
+  return String(raw || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/**
+ * Find an existing DevJewels Shopify product for design_no.
+ * Prefer identity tag; also match title+vendor and metafield (orphan recovery).
+ */
+export async function findShopifyProductByDesignNo(
+  client: ShopifyAdminClient,
+  designNo: string,
+): Promise<string | null> {
+  const key = normalizeDesignNoKey(designNo);
+  if (!key) return null;
+  const tag = designIdentityTag(designNo);
+  const vendor = escapeShopifySearchValue(DEVJEWELS_SHOPIFY_VENDOR);
+  const title = escapeShopifySearchValue(designNo.trim());
+  const tagQ = escapeShopifySearchValue(tag);
+  const query =
+    `vendor:"${vendor}" AND (tag:"${tagQ}" OR title:"${title}")`;
+
+  const result = await client.graphql<ProductsFindByDesignData>(
+    PRODUCTS_FIND_BY_DESIGN,
+    { query },
+  );
+  throwGraphqlErrors(result.errors);
+
+  const nodes = (result.data?.products?.edges ?? [])
+    .map((e) => e?.node)
+    .filter((n): n is NonNullable<typeof n> => Boolean(n?.id));
+
+  const matches = nodes.filter((n) => {
+    const mf = normalizeDesignNoKey(String(n.metafield?.value || ""));
+    if (mf && mf === key) return true;
+    return normalizeDesignNoKey(String(n.title || "")) === key;
+  });
+  if (!matches.length) return null;
+
+  matches.sort((a, b) => {
+    const va = Number(a.totalVariants ?? 0);
+    const vb = Number(b.totalVariants ?? 0);
+    if (vb !== va) return vb - va;
+    return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+  });
+
+  if (matches.length > 1) {
+    console.warn("shopify_product_find_duplicates", {
+      designNo: key,
+      count: matches.length,
+      kept: matches[0]?.id,
+    });
+  }
+  return matches[0]?.id ?? null;
+}
+
 export async function createShopifyProduct(
   client: ShopifyAdminClient,
   input: CreateProductInput,
 ): Promise<CreateProductResult> {
   if (!input.variants.length) {
     throw new ShopifyHttpError(400, "createProduct requires at least one variant");
+  }
+
+  // Root fix: never create a second Shopify product for the same design_no.
+  // Retries after a failed create leave orphans; reclaim the fullest match.
+  const existingId = await findShopifyProductByDesignNo(client, input.designNo);
+  if (existingId) {
+    console.info("shopify_product_create_reclaim", {
+      connectionId: input.connectionId,
+      designNo: input.designNo,
+      externalProductId: existingId,
+    });
+    if (input.onExternalProductId) {
+      await input.onExternalProductId(existingId);
+    }
+    return updateShopifyProduct(client, {
+      ...input,
+      externalProductId: existingId,
+      existingVariants: [],
+    });
   }
 
   // Shopify 2024-10+: create product shell, then variants via bulk APIs.
@@ -366,6 +502,11 @@ export async function createShopifyProduct(
     throw new ShopifyHttpError(502, "productCreate returned no product id");
   }
 
+  // Map immediately so a later variant/media failure retries update, not create.
+  if (input.onExternalProductId) {
+    await input.onExternalProductId(product.id);
+  }
+
   const created = await client.graphql<BulkVariantData>(
     PRODUCT_VARIANTS_BULK_CREATE,
     {
@@ -394,7 +535,8 @@ export async function createShopifyProduct(
 
 /**
  * Update title/metafields; bulk-update prices on mapped variants;
- * bulk-create any new job_no variants not yet mapped.
+ * bulk-create any new job_no variants not yet mapped;
+ * bulk-delete stale placeholders / sold jobs (after desired variants exist).
  */
 export async function updateShopifyProduct(
   client: ShopifyAdminClient,
@@ -479,6 +621,8 @@ export async function updateShopifyProduct(
   if (toCreate.length > 0) {
     const bulk = await client.graphql<BulkVariantData>(PRODUCT_VARIANTS_BULK_CREATE, {
       productId,
+      // Orphan reclaim (no mapped variants yet) must drop Shopify's default variant.
+      ...(toUpdate.length === 0 ? { strategy: "REMOVE_STANDALONE_VARIANT" } : {}),
       variants: toCreate.map((v) => bulkVariantInput(input.designNo, v, true)),
     });
     throwGraphqlErrors(bulk.errors);
@@ -488,6 +632,34 @@ export async function updateShopifyProduct(
     );
     const nodes = bulk.data?.productVariantsBulkCreate?.productVariants ?? [];
     resultVariants.push(...matchVariants(toCreate, nodes));
+  }
+
+  // Delete after desired variants exist so the product never drops to zero variants.
+  const removeIds = [
+    ...new Set(
+      (input.removeVariants ?? [])
+        .map((v) => String(v.externalVariantId || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (removeIds.length > 0 && resultVariants.length > 0) {
+    const keepIds = new Set(resultVariants.map((v) => v.externalVariantId));
+    const safeRemove = removeIds.filter((id) => !keepIds.has(id));
+    if (safeRemove.length > 0) {
+      const deleted = await client.graphql<{
+        productVariantsBulkDelete?: {
+          userErrors?: Array<{ field?: string[]; message: string }>;
+        };
+      }>(PRODUCT_VARIANTS_BULK_DELETE, {
+        productId,
+        variantsIds: safeRemove,
+      });
+      throwGraphqlErrors(deleted.errors);
+      throwUserErrors(
+        deleted.data?.productVariantsBulkDelete?.userErrors,
+        "productVariantsBulkDelete",
+      );
+    }
   }
 
   await attachShopifyProductImages(client, productId, input.imageUrls, {

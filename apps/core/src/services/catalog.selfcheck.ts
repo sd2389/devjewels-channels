@@ -208,6 +208,16 @@ async function main(): Promise<void> {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
+    // find-before-create (no existing product in this selfcheck)
+    if (
+      body.includes("productsFindByDesign") ||
+      (body.includes("products(first:") && body.includes("metafield"))
+    ) {
+      return new Response(
+        JSON.stringify({ data: { products: { edges: [] } } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
     // productCreate GraphQL
     if (body.includes("productCreate")) {
       return new Response(
@@ -239,7 +249,8 @@ async function main(): Promise<void> {
     if (
       body.includes("productUpdate") ||
       body.includes("productVariantsBulkUpdate") ||
-      body.includes("productVariantsBulkCreate")
+      body.includes("productVariantsBulkCreate") ||
+      body.includes("productVariantsBulkDelete")
     ) {
       return new Response(
         JSON.stringify({
@@ -266,6 +277,9 @@ async function main(): Promise<void> {
                   inventoryItem: { id: "gid://shopify/InventoryItem/21" },
                 },
               ],
+              userErrors: [],
+            },
+            productVariantsBulkDelete: {
               userErrors: [],
             },
           },

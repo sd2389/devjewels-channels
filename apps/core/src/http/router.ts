@@ -1,4 +1,5 @@
 import { postInternalEvents } from "./routes/internalEvents";
+import { postInternalCustomerMarkup } from "./routes/internalCustomerMarkup";
 import { postShopifyWebhooks } from "./routes/shopifyWebhooks";
 import {
   getShopifyAuthCallback,
@@ -60,6 +61,10 @@ const routes: Array<{ pattern: string; handle: RouteHandler }> = [
   {
     pattern: "POST /api/internal/events",
     handle: async (req) => postInternalEvents(req),
+  },
+  {
+    pattern: "POST /api/internal/customer-markup",
+    handle: async (req) => postInternalCustomerMarkup(req),
   },
   {
     pattern: "POST /api/shopify/webhooks",

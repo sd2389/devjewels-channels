@@ -1,5 +1,5 @@
 /**
- * Order processing: load webhook_event → adapter.handleOrder → Django reserve.
+ * Order processing: load webhook_event → resolve DJ lines → Django reserve.
  */
 import { AdapterRouter } from "@/channels/router";
 import {
@@ -7,6 +7,10 @@ import {
   deverpClient,
 } from "@/integrations/deverp/client";
 import { safeErrorMessage } from "@/security/redact";
+import {
+  applyResolvedLines,
+  resolveChannelOrderLines,
+} from "@/services/channelOrderLineResolve";
 import { writeSyncLog } from "@/services/syncLog";
 import { getWebhookEventStore } from "@/services/webhookEvents";
 import type { OrderProcessingJob } from "@/workers/handlers";
@@ -95,7 +99,28 @@ export async function runOrderProcessingJob(
       return "SKIPPED";
     }
 
-    const normalized = await adapter.handleOrder(payload, job.connectionId);
+    // Map Shopify SKU / variant_id → design_no + job_no (metafields never land on line_items).
+    const resolved = await resolveChannelOrderLines({
+      connectionId: job.connectionId,
+      payload,
+    });
+    if (resolved.lines.length === 0) {
+      await writeSyncLog({
+        connectionId: job.connectionId,
+        platform: job.platform,
+        jobType: "order",
+        status: "SKIPPED",
+        message:
+          resolved.skippedUnmapped > 0
+            ? `no_devjewels_lines skipped=${resolved.skippedUnmapped}`
+            : "empty_order_lines",
+      });
+      await store.markStatus(event.id, "processed");
+      return "SKIPPED";
+    }
+
+    const shell = await adapter.handleOrder(payload, job.connectionId);
+    const normalized = applyResolvedLines(shell, resolved.lines);
     const result = await deverpClient.reserveOrder({
       platform: normalized.platform,
       connection_id: normalized.connectionId,
@@ -118,7 +143,11 @@ export async function runOrderProcessingJob(
       status: "SUCCESS",
       message: result.duplicate
         ? `duplicate order_number=${result.order_number}`
-        : `order_number=${result.order_number}`,
+        : `order_number=${result.order_number}${
+            resolved.skippedUnmapped
+              ? ` skipped_unmapped=${resolved.skippedUnmapped}`
+              : ""
+          }`,
       payloadRef: event.external_event_id,
     });
     await store.markStatus(event.id, "processed");

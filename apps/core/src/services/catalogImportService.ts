@@ -22,6 +22,10 @@ import {
 } from "@/services/connectionDesignMarkups";
 import { resolveDesignImageUrls } from "@/services/designImageUrls";
 import { resolveDesignShopifyTaxonomy } from "@/services/designShopifyTaxonomy";
+import {
+  resolveChannelInventoryJobs,
+  staleVariantMappingsToRemove,
+} from "@/services/channelInventoryJobs";
 import { detailsFromInventoryJob } from "@/services/jobVariantDetails";
 import {
   designInFeed,
@@ -164,17 +168,14 @@ async function importOneDesign(input: {
   tags: string[];
 }): Promise<"ok" | "skipped" | "failed"> {
   const inventory = await deverpClient.getInventory(input.designNo);
-  const liveJobs = (inventory.jobs || []).filter((j) =>
-    String(j.job_no || "").trim(),
+  // Live jobs only; OOS → design_no placeholder. Drops leftover placeholders on re-sync.
+  const resolved = resolveChannelInventoryJobs(
+    input.designNo,
+    inventory.jobs,
+    input.defaultPrice,
   );
-  // Out of stock still gets a Shopify product (qty 0). Merchant can deactivate.
-  // Same placeholder as productSyncService. Ceiling: leftover design_no SKU after
-  // live jobs appear — upgrade is to drop the placeholder on the next stocked sync.
-  const jobs =
-    liveJobs.length > 0
-      ? liveJobs
-      : [{ job_no: input.designNo, totamt: input.defaultPrice }];
-  const outOfStock = liveJobs.length === 0;
+  const jobs = resolved.jobs;
+  const outOfStock = resolved.outOfStock;
 
   const variants = [];
   for (const j of jobs) {
@@ -228,13 +229,21 @@ async function importOneDesign(input: {
 
   try {
     let result;
+    let removeVariants: Array<{
+      jobNo: string;
+      externalVariantId: string;
+      externalInventoryItemId?: string;
+    }> = [];
     if (existing?.external_product_id) {
+      const allMapped = await variantStore.listByDesign(
+        input.connectionId,
+        input.designNo,
+      );
       const existingVariants = [];
       for (const v of variants) {
-        const mapped = await variantStore.getByDesignJob(
-          input.connectionId,
-          input.designNo,
-          v.jobNo,
+        const mapped = allMapped.find(
+          (m) =>
+            m.job_no.trim().toUpperCase() === v.jobNo.trim().toUpperCase(),
         );
         if (mapped) {
           existingVariants.push({
@@ -244,6 +253,15 @@ async function importOneDesign(input: {
           });
         }
       }
+      removeVariants = staleVariantMappingsToRemove({
+        designNo: input.designNo,
+        desiredJobNos: variants.map((v) => v.jobNo),
+        mapped: allMapped.map((m) => ({
+          jobNo: m.job_no,
+          externalVariantId: m.external_variant_id,
+          externalInventoryItemId: m.external_inventory_item_id,
+        })),
+      });
       result = await adapter.updateProduct({
         connectionId: input.connectionId,
         designNo: input.designNo,
@@ -255,6 +273,7 @@ async function importOneDesign(input: {
         tags: input.tags,
         variants,
         existingVariants,
+        removeVariants,
       });
     } else {
       result = await adapter.createProduct({
@@ -266,6 +285,13 @@ async function importOneDesign(input: {
         productType: input.productType,
         tags: input.tags,
         variants,
+        onExternalProductId: async (externalProductId) => {
+          await upsertProductMapping({
+            connectionId: input.connectionId,
+            designNo: input.designNo,
+            externalProductId,
+          });
+        },
       });
     }
 
@@ -283,6 +309,13 @@ async function importOneDesign(input: {
         externalVariantId: variant.externalVariantId,
         externalInventoryItemId: variant.externalInventoryItemId ?? null,
       });
+    }
+    for (const stale of removeVariants) {
+      await variantStore.deleteByDesignJob(
+        input.connectionId,
+        input.designNo,
+        stale.jobNo,
+      );
     }
 
     if (input.canViewInventory && input.syncInventory) {

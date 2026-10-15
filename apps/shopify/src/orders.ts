@@ -1,9 +1,9 @@
 /**
  * Shopify order payload → NormalizedChannelOrder.
  *
- * Line identity: prefer metafield / SKU as job_no; design_no from properties or SKU prefix.
- * Channels must already have variant_mapping for reliable reverse lookup in later polish;
- * MVP accepts design_no + job_no via line_item properties / note_attributes / sku.
+ * Line identity: properties when present; otherwise SKU (= job_no) and variant_id.
+ * Full design_no+job_no resolution (via variant_mapping) runs in Channels core
+ * before Django reserve — synced products put design_no on metafields, not line props.
  */
 import type { NormalizedChannelOrder } from "@devjewels-channels/core/channels/types";
 
@@ -13,9 +13,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function propMap(
-  properties: unknown,
-): Record<string, string> {
+function propMap(properties: unknown): Record<string, string> {
   const out: Record<string, string> = {};
   if (!Array.isArray(properties)) return out;
   for (const p of properties) {
@@ -42,11 +40,11 @@ function resolveDesignJob(line: Record<string, unknown>): {
     props["job_no"] ||
     props["jobno"] ||
     props["_job_no"] ||
-    String(line.sku || "").trim() ||
-    String(line.variant_id || "").trim();
+    String(line.sku || "").trim();
 
-  if (!designNo || !jobNo) return null;
-  return { designNo, jobNo };
+  // Properties path: both required. SKU-only is resolved later via variant_mapping.
+  if (designNo && jobNo) return { designNo, jobNo };
+  return null;
 }
 
 export function normalizeShopifyOrder(
@@ -75,11 +73,7 @@ export function normalizeShopifyOrder(
     const line = asRecord(raw);
     if (!line) continue;
     const keys = resolveDesignJob(line);
-    if (!keys) {
-      throw new Error(
-        "Shopify line_item missing design_no/job_no (set properties or sku)",
-      );
-    }
+    if (!keys) continue;
     const qty = Number.parseInt(String(line.quantity ?? "1"), 10);
     lines.push({
       designNo: keys.designNo,
@@ -89,10 +83,7 @@ export function normalizeShopifyOrder(
     });
   }
 
-  if (!lines.length) {
-    throw new Error("Shopify order has no resolvable line items");
-  }
-
+  // Empty lines OK here — orderProcessingService fills from variant_mapping.
   return {
     connectionId,
     platform: "SHOPIFY",

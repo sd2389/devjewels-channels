@@ -209,9 +209,10 @@ EOF
 3. Tell us if you change your primary inventory location.
 4. Do not manually delete synced DevJewels products without telling us — remapping may break.
 
-## What we do not do in this package
+## Orders (updated)
 
-- Orders from Shopify are **not** automatically sent to DevJewels. Continue ordering from DevJewels the way you do today (portal / sales contact / API if you use it separately).
+- When the Customer API key has **`can_place_orders`** and the connection has **`sync_orders`**, Shopify `orders/create` **does** create a pending DevJewels order automatically (variant_mapping resolves design/job). See `docs/CHANNELS_LIVE_INVENTORY_AND_ORDERS.md` in the backend repo.
+- Catalog-only installs without place-orders keep `sync_orders=false` (no auto order).
 
 ## Security
 
