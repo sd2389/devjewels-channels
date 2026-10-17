@@ -12,7 +12,7 @@ import {
   createMemoryShopifyInviteStore,
   setShopifyInviteStoreForTests,
 } from "@devjewels-channels/shopify/inviteStore";
-import { getConnectShopify } from "./shopifyConnect";
+import { getConnectShopify, postConnectShopify } from "./shopifyConnect";
 import { dispatch } from "../router";
 
 process.env.CHANNELS_INVITE_SIGNING_SECRET = "selfcheck-invite-secret";
@@ -60,10 +60,22 @@ async function testValidInviteRedirectsToOauth(): Promise<void> {
     jti,
     expiresAt,
   });
-  const res = await getConnectShopify(
+  const page = await getConnectShopify(
     new Request(
       `https://channels.devjewels.com/api/connect/shopify?token=${encodeURIComponent(token)}`,
     ),
+  );
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /Continue to Shopify/);
+  assert.equal(store.rows.get(jti)?.consumed_at, null, "GET must not consume the invite");
+
+  const res = await postConnectShopify(
+    new Request("https://channels.devjewels.com/api/connect/shopify", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token }).toString(),
+    }),
   );
   assert.equal(res.status, 302);
   const loc = new URL(locationOf(res));
@@ -85,10 +97,12 @@ async function testUsedInviteRedirects(): Promise<void> {
     jti,
     expiresAt,
   });
-  const res = await getConnectShopify(
-    new Request(
-      `https://channels.devjewels.com/api/connect/shopify?token=${encodeURIComponent(token)}`,
-    ),
+  const res = await postConnectShopify(
+    new Request("https://channels.devjewels.com/api/connect/shopify", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token }).toString(),
+    }),
   );
   assert.equal(res.status, 302);
   assert.match(locationOf(res), /shopify_error=invite_used/);
@@ -113,10 +127,12 @@ async function testConsumeThrowRedirects(): Promise<void> {
     jti,
     expiresAt,
   });
-  const res = await getConnectShopify(
-    new Request(
-      `https://channels.devjewels.com/api/connect/shopify?token=${encodeURIComponent(token)}`,
-    ),
+  const res = await postConnectShopify(
+    new Request("https://channels.devjewels.com/api/connect/shopify", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token }).toString(),
+    }),
   );
   assert.equal(res.status, 302, "DB errors must not 500 the merchant");
   assert.match(locationOf(res), /shopify_error=invalid_invite/);
@@ -135,6 +151,18 @@ async function testConnectSuccessHtml(): Promise<void> {
   assert.match(body, /invalid or has expired/i);
 }
 
+async function testPostRouteIsRegistered(): Promise<void> {
+  const routed = await dispatch(
+    new Request("https://channels.devjewels.com/api/connect/shopify", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: "not-a-valid-token" }).toString(),
+    }),
+  );
+  assert.equal(routed.status, 302);
+  assert.match(locationOf(routed), /shopify_error=invalid_invite/);
+}
+
 async function main(): Promise<void> {
   await testMissingTokenRedirectsAbsolute();
   await testGarbageTokenRedirects();
@@ -142,6 +170,7 @@ async function main(): Promise<void> {
   await testUsedInviteRedirects();
   await testConsumeThrowRedirects();
   await testConnectSuccessHtml();
+  await testPostRouteIsRegistered();
   console.log("shopifyConnect self-check ok");
 }
 
