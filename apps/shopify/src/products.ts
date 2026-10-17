@@ -15,6 +15,12 @@ import { ShopifyHttpError } from "./client";
 /** Shown on Shopify product Vendor — marks DevJewels catalog lines. */
 export const DEVJEWELS_SHOPIFY_VENDOR = "Dev Jewels Inc.";
 
+/**
+ * First push is unpublished. Updates must not send status: once a merchant
+ * sets the product Active, later syncs have to leave that choice in place.
+ */
+const NEW_SHOPIFY_PRODUCT_STATUS = "DRAFT";
+
 /** Cap product description job rows (scale: avoid multi-MB HTML). */
 const DESCRIPTION_JOB_CAP = 40;
 
@@ -566,7 +572,7 @@ export async function createShopifyProduct(
     product: {
       title: input.title || input.designNo,
       vendor: DEVJEWELS_SHOPIFY_VENDOR,
-      status: "ACTIVE",
+      status: NEW_SHOPIFY_PRODUCT_STATUS,
       metafields: designMetafields(input.designNo),
       ...(descriptionHtml ? { descriptionHtml } : {}),
       ...shopifyTaxonomyFields(input),
@@ -649,7 +655,6 @@ export async function updateShopifyProduct(
       id: productId,
       title: input.title || input.designNo,
       vendor: DEVJEWELS_SHOPIFY_VENDOR,
-      status: "ACTIVE",
       metafields: designMetafields(input.designNo),
       ...(descriptionHtml ? { descriptionHtml } : {}),
       ...shopifyTaxonomyFields(input),

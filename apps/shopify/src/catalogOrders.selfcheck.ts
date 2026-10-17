@@ -184,6 +184,9 @@ async function main(): Promise<void> {
   if (!calls[1]?.includes("dj_design:D1")) {
     throw new Error("create must attach design identity tag");
   }
+  if (!calls[1]?.includes('"status":"DRAFT"')) {
+    throw new Error("new products must be created as DRAFT");
+  }
 
   // Retry path: existing orphan must update, not productCreate again.
   const createCallsBefore = calls.filter((b) => b.includes("productCreate(")).length;
@@ -220,6 +223,11 @@ async function main(): Promise<void> {
     throw new Error("update product id mismatch");
   }
   if (calls.length < 4) throw new Error("expected productUpdate graphql calls");
+  const productUpdateCall = calls.find((body) => body.includes("productUpdate("));
+  if (!productUpdateCall) throw new Error("expected a productUpdate call");
+  if (productUpdateCall.includes('"status"')) {
+    throw new Error("product update must not change Shopify publish status");
+  }
 
   const updatedNewJob = await updateShopifyProduct(client, {
     connectionId: "c",
