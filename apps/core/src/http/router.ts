@@ -16,7 +16,7 @@ import {
   postAdminShopifyOauthConfig,
   postWoocommerceWebhooks,
 } from "./routes/admin";
-import { getConnectShopify } from "./routes/shopifyConnect";
+import { getConnectShopify, postConnectShopify } from "./routes/shopifyConnect";
 import { getConnectSuccess } from "./routes/connectSuccess";
 import { getAppRoot } from "./routes/appLaunch";
 import { json } from "./response";
@@ -81,6 +81,10 @@ const routes: Array<{ pattern: string; handle: RouteHandler }> = [
   {
     pattern: "GET /api/connect/shopify",
     handle: async (req) => getConnectShopify(req),
+  },
+  {
+    pattern: "POST /api/connect/shopify",
+    handle: async (req) => postConnectShopify(req),
   },
   {
     pattern: "GET /connect/success",

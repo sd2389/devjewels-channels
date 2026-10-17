@@ -1,1 +1,4 @@
-export { getConnectShopify as GET } from "@/http/routes/shopifyConnect";
+export {
+  getConnectShopify as GET,
+  postConnectShopify as POST,
+} from "@/http/routes/shopifyConnect";
