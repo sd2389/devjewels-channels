@@ -12,6 +12,10 @@ import {
   createMemoryShopifyInviteStore,
   setShopifyInviteStoreForTests,
 } from "@devjewels-channels/shopify/inviteStore";
+import {
+  createMemoryShopifyMetaStore,
+  setShopifyMetaStoreForTests,
+} from "@devjewels-channels/shopify";
 import { getConnectShopify, postConnectShopify } from "./shopifyConnect";
 import { dispatch } from "../router";
 
@@ -44,8 +48,23 @@ async function testGarbageTokenRedirects(): Promise<void> {
 }
 
 async function testValidInviteRedirectsToOauth(): Promise<void> {
+  const prev = {
+    key: process.env.SHOPIFY_API_KEY,
+    secret: process.env.SHOPIFY_API_SECRET,
+    pubKey: process.env.SHOPIFY_PUBLIC_API_KEY,
+    pubSecret: process.env.SHOPIFY_PUBLIC_API_SECRET,
+    vault: process.env.CHANNELS_VAULT_DIR,
+  };
+  process.env.SHOPIFY_API_KEY = "custom_key_e421";
+  process.env.SHOPIFY_API_SECRET = "custom_secret";
+  process.env.SHOPIFY_PUBLIC_API_KEY = "4238185738d48848640cb7bf46362437";
+  process.env.SHOPIFY_PUBLIC_API_SECRET = "public_secret";
+  process.env.CHANNELS_PUBLIC_BASE_URL = "https://channels.devjewels.com";
+  delete process.env.CHANNELS_VAULT_DIR;
+
   const store = createMemoryShopifyInviteStore();
   setShopifyInviteStoreForTests(store);
+  setShopifyMetaStoreForTests(createMemoryShopifyMetaStore());
   const jti = createInviteJti();
   const expiresAt = new Date(Date.now() + 60_000);
   await store.createInvite({
@@ -83,7 +102,25 @@ async function testValidInviteRedirectsToOauth(): Promise<void> {
   assert.equal(loc.searchParams.get("shop"), "buffedandbubbly.myshopify.com");
   assert.equal(loc.searchParams.get("customer_id"), "907");
   assert.equal(loc.searchParams.get("merchant"), "1");
+  // Must prefer Public app — never Custom BuffedBubbly for merchant invites.
+  assert.equal(
+    loc.searchParams.get("client_id"),
+    "4238185738d48848640cb7bf46362437",
+  );
   setShopifyInviteStoreForTests(null);
+  setShopifyMetaStoreForTests(null);
+
+  if (prev.key !== undefined) process.env.SHOPIFY_API_KEY = prev.key;
+  else delete process.env.SHOPIFY_API_KEY;
+  if (prev.secret !== undefined) process.env.SHOPIFY_API_SECRET = prev.secret;
+  else delete process.env.SHOPIFY_API_SECRET;
+  if (prev.pubKey !== undefined) process.env.SHOPIFY_PUBLIC_API_KEY = prev.pubKey;
+  else delete process.env.SHOPIFY_PUBLIC_API_KEY;
+  if (prev.pubSecret !== undefined) {
+    process.env.SHOPIFY_PUBLIC_API_SECRET = prev.pubSecret;
+  } else delete process.env.SHOPIFY_PUBLIC_API_SECRET;
+  if (prev.vault !== undefined) process.env.CHANNELS_VAULT_DIR = prev.vault;
+  else delete process.env.CHANNELS_VAULT_DIR;
 }
 
 async function testUsedInviteRedirects(): Promise<void> {

@@ -8,6 +8,7 @@
  */
 import {
   assertMyshopifyDomain,
+  isPublicShopifyClientId,
   listShopifyOAuthConfigs,
   matchShopifyOAuthConfigByHmac,
   ShopifyOAuthConfigError,
@@ -15,6 +16,7 @@ import {
 } from "@devjewels-channels/shopify/auth";
 import { getShopifyInviteStore } from "@devjewels-channels/shopify/inviteStore";
 import { getShopifyMetaStore } from "@devjewels-channels/shopify";
+import { getConnectionByCustomerId } from "@/services/connections";
 
 export type ShopifyAppLaunchResult =
   | { kind: "home" }
@@ -107,14 +109,30 @@ export async function resolveShopifyAppLaunch(
   }
 
   // Public App Store automated install has no Channels invite. Shopify requires
-  // an immediate OAuth redirect (not 401 / not intermediate UI). We start OAuth
-  // with the configured fallback customer so authorize begins; binding still
-  // enforces 1:1 shop↔customer in connectShopifyStore. If that customer is
-  // already bound to a different shop, the merchant callback shows installed
-  // success without stealing the connection — real jewelers install via Channels
-  // (pending invite) so each shop gets its own customer.
+  // an immediate OAuth redirect (not 401 / not intermediate UI). Only the Public
+  // app may use the review fallback customer — never Custom BuffedBubbly (that
+  // leaks another jeweler's app name / would bind the wrong customer).
+  if (!isPublicShopifyClientId(matched.apiKey)) {
+    return { kind: "finish_setup" };
+  }
+
   const fallbackCustomerId = resolveAppStoreFallbackCustomerId(matched);
   if (fallbackCustomerId != null) {
+    try {
+      const existing = await getConnectionByCustomerId(fallbackCustomerId);
+      if (existing) {
+        // Fallback customer already owns a shop — do not OAuth-bind a new shop
+        // to their entitlements (catalog leak). Merchant finishes via invite.
+        return { kind: "finish_setup" };
+      }
+    } catch (err) {
+      console.error("shopify_app_launch_fallback_customer_lookup_failed", {
+        shop,
+        error_type: err instanceof Error ? err.name : "Error",
+      });
+      // Fail open to OAuth for App Store review if connection store is down;
+      // connectShopifyStore still enforces 1:1 shop↔customer.
+    }
     return {
       kind: "oauth",
       shop,

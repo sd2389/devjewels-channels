@@ -8,11 +8,13 @@ import {
   signShopifyInviteToken,
 } from "@devjewels-channels/shopify/shopifyInvite";
 import { getShopifyInviteStore } from "@devjewels-channels/shopify/inviteStore";
+import { resolveMerchantInstallOAuthConfig } from "@/services/merchantInstallOauth";
 
 export type CreateShopifyInviteResult = {
   inviteUrl: string;
   expiresAt: string;
   jti: string;
+  clientIdLast4: string;
 };
 
 export async function createShopifyConnectInvite(input: {
@@ -32,6 +34,9 @@ export async function createShopifyConnectInvite(input: {
       "Customer needs an active API key with can_view_designs before generating a connect link",
     );
   }
+
+  // Fail closed before minting a one-time invite that would OAuth the wrong app.
+  const oauthConfig = await resolveMerchantInstallOAuthConfig(shop);
 
   const jti = createInviteJti();
   const expiresAt = new Date(Date.now() + SHOPIFY_INVITE_TTL_MS);
@@ -54,5 +59,6 @@ export async function createShopifyConnectInvite(input: {
     inviteUrl: buildShopifyInviteConnectUrl(channelsPublicOrigin(), token),
     expiresAt: expiresAt.toISOString(),
     jti,
+    clientIdLast4: oauthConfig.apiKey.slice(-4),
   };
 }

@@ -3,7 +3,10 @@
  * Never log access tokens.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { optionalProcessEnv } from "@devjewels-channels/core/config/serverEnv";
+import {
+  optionalProcessEnv,
+  optionalServerEnv,
+} from "@devjewels-channels/core/config/serverEnv";
 import {
   tryReadVaultSecret,
   writeVaultSecret,
@@ -137,7 +140,7 @@ async function readPublicVaultOAuthAppCredentials(): Promise<VaultOAuthPayload |
 
 function envFallbackCustomerId(): number | undefined {
   const raw =
-    optionalProcessEnv("SHOPIFY_APP_STORE_FALLBACK_CUSTOMER_ID") || "";
+    optionalServerEnv("SHOPIFY_APP_STORE_FALLBACK_CUSTOMER_ID") || "";
   const cid = Number(raw);
   if (!Number.isInteger(cid) || cid <= 0) return undefined;
   return cid;
@@ -191,14 +194,15 @@ export async function listShopifyOAuthConfigs(): Promise<ShopifyOAuthConfig[]> {
   const publicVault = await readPublicVaultOAuthAppCredentials();
   if (publicVault) add({ ...publicVault, isPublicApp: true });
 
-  const envKey = optionalProcessEnv("SHOPIFY_API_KEY") || "";
-  const envSecret = optionalProcessEnv("SHOPIFY_API_SECRET") || "";
+  // optionalServerEnv: Lambda process.env + repo-root .env (Next handlers).
+  const envKey = optionalServerEnv("SHOPIFY_API_KEY") || "";
+  const envSecret = optionalServerEnv("SHOPIFY_API_SECRET") || "";
   if (envKey && envSecret) add({ apiKey: envKey, apiSecret: envSecret });
 
   const pubKey =
-    optionalProcessEnv("SHOPIFY_PUBLIC_API_KEY") ||
+    optionalServerEnv("SHOPIFY_PUBLIC_API_KEY") ||
     DEVJEWELS_CHANNELS_PUBLIC_CLIENT_ID;
-  const pubSecret = optionalProcessEnv("SHOPIFY_PUBLIC_API_SECRET") || "";
+  const pubSecret = optionalServerEnv("SHOPIFY_PUBLIC_API_SECRET") || "";
   if (pubKey && pubSecret) {
     add({
       apiKey: pubKey,
@@ -217,6 +221,16 @@ export async function listShopifyOAuthConfigs(): Promise<ShopifyOAuthConfig[]> {
 /** Vault operator credentials win; env SHOPIFY_API_KEY/SECRET is optional fallback. */
 export async function getShopifyOAuthConfig(): Promise<ShopifyOAuthConfig> {
   return (await listShopifyOAuthConfigs())[0]!;
+}
+
+export function isPublicShopifyClientId(apiKey: string): boolean {
+  return apiKey.trim() === DEVJEWELS_CHANNELS_PUBLIC_CLIENT_ID;
+}
+
+/** Public App Store credentials when configured (vault or SHOPIFY_PUBLIC_*). */
+export async function getPublicShopifyOAuthConfig(): Promise<ShopifyOAuthConfig | null> {
+  const configs = await listShopifyOAuthConfigs();
+  return configs.find((c) => isPublicShopifyClientId(c.apiKey)) ?? null;
 }
 
 export async function getShopifyOAuthConfigByClientId(

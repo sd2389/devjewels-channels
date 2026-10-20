@@ -185,12 +185,38 @@ export async function readVaultSecret(id: string): Promise<string> {
   return readFileVault(safeId);
 }
 
-/** Missing vault entry → null (do not throw). Other IO errors propagate. */
+/**
+ * Missing vault entry → null (do not throw).
+ * DB auth/connectivity failures also → null so callers can fall back to env
+ * (e.g. SHOPIFY_PUBLIC_* when channels_app role is unavailable locally).
+ * Unexpected IO errors still propagate.
+ */
 export async function tryReadVaultSecret(id: string): Promise<string | null> {
   try {
     return await readVaultSecret(id);
   } catch (err) {
     if (err instanceof Error && /not found/i.test(err.message)) return null;
+    const code =
+      err && typeof err === "object" && "code" in err
+        ? String((err as { code?: unknown }).code ?? "")
+        : "";
+    const message = err instanceof Error ? err.message : "";
+    if (
+      code === "28000" ||
+      code === "28P01" ||
+      code === "ECONNREFUSED" ||
+      code === "ENOTFOUND" ||
+      /role .* does not exist|password authentication failed|connect ECONNREFUSED/i.test(
+        message,
+      )
+    ) {
+      console.error("vault_read_unavailable", {
+        id,
+        error_type: err instanceof Error ? err.name : "Error",
+        code,
+      });
+      return null;
+    }
     throw err;
   }
 }
