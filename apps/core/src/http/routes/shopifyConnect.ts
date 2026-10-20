@@ -2,6 +2,7 @@ import {
   verifyShopifyInviteToken,
 } from "@devjewels-channels/shopify/shopifyInvite";
 import { getShopifyInviteStore } from "@devjewels-channels/shopify/inviteStore";
+import { resolveMerchantInstallOAuthConfig } from "@/services/merchantInstallOauth";
 import { redirect, redirectTo } from "../response";
 
 function inviteFail(
@@ -99,10 +100,23 @@ async function beginShopifyOauth(request: Request, token: string): Promise<Respo
     return inviteFail(request, "invalid_invite");
   }
 
+  let clientId: string;
+  try {
+    const config = await resolveMerchantInstallOAuthConfig(payload.shop);
+    clientId = config.apiKey;
+  } catch (err) {
+    console.error("shopify_invite_oauth_config_failed", {
+      error_type: err instanceof Error ? err.name : "Error",
+      message: err instanceof Error ? err.message.slice(0, 200) : "unknown",
+    });
+    return inviteFail(request, "invalid_invite");
+  }
+
   const authUrl = new URL("/api/shopify/auth", new URL(request.url).origin);
   authUrl.searchParams.set("shop", payload.shop);
   authUrl.searchParams.set("customer_id", String(payload.customer_id));
   authUrl.searchParams.set("merchant", "1");
+  authUrl.searchParams.set("client_id", clientId);
   return redirect(authUrl.toString(), 302);
 }
 

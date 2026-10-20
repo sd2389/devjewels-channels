@@ -2,12 +2,14 @@ import { optionalProcessEnv } from "@/config/serverEnv";
 import {
   beginShopifyOAuthInstall,
   exchangeShopifyOAuthCode,
+  getShopifyOAuthConfigByClientId,
   matchShopifyOAuthConfigByHmac,
   isMerchantOAuthState,
   parseCustomerIdFromOAuthState,
   ShopifyOAuthConfigError,
 } from "@devjewels-channels/shopify/auth";
 import { connectShopifyStore } from "@/services/connectShopifyService";
+import { resolveMerchantInstallOAuthConfig } from "@/services/merchantInstallOauth";
 import { json, redirect } from "../response";
 
 /**
@@ -30,9 +32,15 @@ export async function getShopifyAuthStart(request: Request): Promise<Response> {
     );
   }
   try {
+    const config = clientId
+      ? await getShopifyOAuthConfigByClientId(clientId)
+      : await resolveMerchantInstallOAuthConfig(shop);
+    if (!config) {
+      return json({ error: "Unknown Shopify client_id" }, 400);
+    }
     const { url: authorizeUrl } = await beginShopifyOAuthInstall(shop, customerId, {
       merchantSuccess,
-      ...(clientId ? { clientId } : {}),
+      config,
     });
     return redirect(authorizeUrl, 302);
   } catch (err) {
@@ -49,6 +57,9 @@ export async function getShopifyAuthStart(request: Request): Promise<Response> {
         { error: "Channels database is not configured (set DATABASE_URL)" },
         503,
       );
+    }
+    if (/Custom Shopify app|Public DevJewels-Channels/i.test(message)) {
+      return json({ error: message }, 409);
     }
     const status = /must be a \*\.myshopify\.com|customer_id/i.test(message)
       ? 400

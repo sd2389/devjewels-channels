@@ -118,12 +118,13 @@ export async function postAdminShopifyInvites(req: Request): Promise<Response> {
       {
         inviteUrl: result.inviteUrl,
         expiresAt: result.expiresAt,
+        clientIdLast4: result.clientIdLast4,
       },
       201,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : "";
-    if (/API key|can_view_designs/i.test(message)) {
+    if (/API key|can_view_designs|Custom Shopify app|Public DevJewels-Channels/i.test(message)) {
       return json({ error: message }, 400);
     }
     return jsonError(err);
