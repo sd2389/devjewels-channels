@@ -147,8 +147,10 @@ function envFallbackCustomerId(): number | undefined {
 }
 
 /**
- * Primary (Custom/BuffedBubbly) plus optional Public App Store credentials.
- * Dedupes by apiKey. Order: vault primary, public vault, env primary, env public.
+ * Primary (Custom/BuffedBubbly), optional Public App Store credentials, and an
+ * optional one-store custom install app (SHOPIFY_CUSTOM_INSTALL_*).
+ * Dedupes by apiKey. Order: vault primary, public vault, env primary, env public,
+ * then the one-store custom install app.
  */
 export async function listShopifyOAuthConfigs(): Promise<ShopifyOAuthConfig[]> {
   const scopes =
@@ -210,6 +212,15 @@ export async function listShopifyOAuthConfigs(): Promise<ShopifyOAuthConfig[]> {
       appStoreFallbackCustomerId: envFallback,
       isPublicApp: true,
     });
+  }
+
+  // One-store custom distribution app (not BuffedBubbly, not the Public app).
+  // HMAC for that shop must match this secret or install returns Unauthorized.
+  const customInstallKey = optionalServerEnv("SHOPIFY_CUSTOM_INSTALL_API_KEY") || "";
+  const customInstallSecret =
+    optionalServerEnv("SHOPIFY_CUSTOM_INSTALL_API_SECRET") || "";
+  if (customInstallKey && customInstallSecret) {
+    add({ apiKey: customInstallKey, apiSecret: customInstallSecret });
   }
 
   if (!out.length) {

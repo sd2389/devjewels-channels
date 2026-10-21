@@ -65,6 +65,7 @@ No path folders — secrets at project root `/`.
 | `CHANNELS_CORS_ORIGINS` | Comma-separated admin origins |
 | `SHOPIFY_API_KEY` / `SHOPIFY_API_SECRET` | Custom BuffedBubbly (enfakt only) |
 | `SHOPIFY_PUBLIC_API_KEY` / `SHOPIFY_PUBLIC_API_SECRET` | **Required for new merchants** — Public `DevJewels-Channels` (`42381857…`) |
+| `SHOPIFY_CUSTOM_INSTALL_API_KEY` / `SHOPIFY_CUSTOM_INSTALL_API_SECRET` | One-store custom app. HMAC for that shop only. Not a fallback customer. |
 | `SHOPIFY_APP_STORE_FALLBACK_CUSTOMER_ID` | Empty review customer only (never a live jeweler) |
 
 Lambdas stay **in VPC** (RDS SG allows `172.16.0.0/16`). NAT required for Shopify/HTTPS.
