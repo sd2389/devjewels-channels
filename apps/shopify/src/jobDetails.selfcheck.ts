@@ -50,31 +50,27 @@ export function shopifyJobDetailsSelfcheck(): void {
       },
     },
   ]);
-  assert(html?.includes("<h3>Design No: DJ-1&lt;script&gt;</h3>"), "design heading");
   assert(
-    html?.includes("<strong>Job No:</strong> 18375"),
-    "job is a labelled field",
+    html?.includes("<h3>In Stock (1) — DJ-1&lt;script&gt;</h3>"),
+    "design heading is escaped",
   );
-  assert(
-    html?.includes("<strong>Store:</strong> NEW YORK"),
-    "store is a labelled field",
-  );
-  assert(
-    html?.includes("<strong>Gold WT:</strong> 11.680 gms"),
-    "gold weight keeps unit and customer-page label",
-  );
-  assert(!html?.includes("<strong>Purity:</strong>"), "quality label is not Purity");
-  assert(
-    html?.includes("<strong>Job No:</strong> 18375<br>"),
-    "fields are separated by line breaks",
-  );
-  assert(!html?.includes("<table"), "description must not use tables (theme-unsafe)");
+  assert(html?.includes("<table"), "description is the stock table");
+  assert(html?.includes("<th>Job No</th>"), "job column");
+  assert(html?.includes("<td>18375</td>"), "job number is a cell");
+  assert(html?.includes("<th>Store</th>"), "store column when a job has a store");
+  assert(html?.includes("<td>NEW YORK</td>"), "store cell");
+  assert(html?.includes("<th>Gold WT</th>"), "gold weight column");
+  assert(html?.includes("<td>11.680 gms</td>"), "gold weight keeps its unit");
+  assert(html?.includes("<th>Quality</th>"), "quality column matches the customer table");
+  assert(html?.includes("<td>—</td>"), "blank quality cell is a dash");
+  assert(!html?.includes("<th>Type</th>"), "type column hidden when no job has a type");
+  assert(!html?.includes("<th>Purity</th>"), "quality label is not Purity");
   assert(!html?.includes(" · "), "description must not use inline separators");
-  assert(!html?.includes("<strong>Quality:</strong>"), "empty fields must be omitted");
+  assert(!html?.includes("<script"), "description must not allow raw tags from values");
   const rich = jobDetailsDescriptionHtml("DJ-2", [
     {
       jobNo: "18376",
-      price: 100,
+      price: 1650,
       quantity: 1,
       details: {
         diamondType: "Lab Grown",
@@ -86,11 +82,13 @@ export function shopifyJobDetailsSelfcheck(): void {
       },
     },
   ]);
-  assert(rich?.includes("<strong>Type:</strong> Lab Grown"), "type label");
-  assert(rich?.includes("<strong>Stone WT:</strong> 0.450 cts"), "stone weight");
-  assert(rich?.includes("<strong>Certificate:</strong> GIA, 123"), "certificate");
-  assert(rich?.includes("<strong>Dia Quality:</strong> VVS-VS"), "dia quality label");
-  assert(!html?.includes("<script"), "description must not allow raw tags from values");
+  assert(rich?.includes("<th>Type</th>"), "type column");
+  assert(rich?.includes("<td>Lab Grown</td>"), "type cell");
+  assert(rich?.includes("<th>Stone WT</th>"), "stone weight column");
+  assert(rich?.includes("<td>0.450 cts</td>"), "stone weight cell");
+  assert(rich?.includes("<th>Certificate</th>"), "certificate column");
+  assert(rich?.includes("<td>GIA, 123</td>"), "certificate cell");
+  assert(rich?.includes("<td>$1,650.00</td>"), "price matches the customer table");
 }
 
 shopifyJobDetailsSelfcheck();

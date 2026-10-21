@@ -94,10 +94,49 @@ function escapeHtml(raw: string): string {
     .replace(/"/g, "&quot;");
 }
 
+type DescriptionColumn = {
+  label: string;
+  /** Customer stock table always shows these, even when a cell is blank. */
+  always: boolean;
+  cell: (variant: CreateProductInput["variants"][number]) => string;
+};
+
+function descriptionCell(raw: string | undefined): string {
+  return String(raw || "").trim();
+}
+
+/** Customer stock table price, e.g. 1650 → $1,650.00. */
+export function formatDescriptionPrice(amount: number): string {
+  if (!Number.isFinite(amount) || amount <= 0) return "";
+  const [whole, frac] = amount.toFixed(2).split(".");
+  return `$${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${frac}`;
+}
+
+/** Same columns as the customer product-page stock table, in that order. */
+const DESCRIPTION_COLUMNS: DescriptionColumn[] = [
+  { label: "Job No", always: true, cell: (v) => descriptionCell(v.jobNo) },
+  { label: "Metal", always: true, cell: (v) => descriptionCell(v.details?.metal) },
+  { label: "Quality", always: true, cell: (v) => descriptionCell(v.details?.purity) },
+  { label: "Color", always: true, cell: (v) => descriptionCell(v.details?.color) },
+  { label: "Type", always: false, cell: (v) => descriptionCell(v.details?.diamondType) },
+  { label: "Dia Quality", always: true, cell: (v) => descriptionCell(v.details?.diaQly) },
+  { label: "Dia Color", always: true, cell: (v) => descriptionCell(v.details?.diaClr) },
+  { label: "Gold WT", always: true, cell: (v) => descriptionCell(v.details?.gwt) },
+  { label: "Diamond WT", always: false, cell: (v) => descriptionCell(v.details?.dwt) },
+  { label: "Stone WT", always: false, cell: (v) => descriptionCell(v.details?.swt) },
+  { label: "Size", always: false, cell: (v) => descriptionCell(v.details?.size) },
+  { label: "Store", always: false, cell: (v) => descriptionCell(v.details?.store) },
+  {
+    label: "Certificate",
+    always: false,
+    cell: (v) => descriptionCell(v.details?.certificate),
+  },
+  { label: "Price", always: true, cell: (v) => formatDescriptionPrice(v.price) },
+];
+
 /**
- * Merchant- and storefront-visible product description block: one vertical
- * paragraph per job. Uses `<p>/<br>/<strong>` because theme RTE styles
- * (Dawn included) reflow or clip `<table>` inside the narrow product column.
+ * Product description as the customer stock table: one row per job.
+ * `border` is an HTML attribute so the grid still shows if a theme strips CSS.
  */
 export function jobDetailsDescriptionHtml(
   designNo: string,
@@ -105,43 +144,38 @@ export function jobDetailsDescriptionHtml(
 ): string | undefined {
   const rows = variants.slice(0, DESCRIPTION_JOB_CAP);
   if (!rows.length) return undefined;
-  const lines: string[] = [
-    `<h3>Design No: ${escapeHtml(designNo)}</h3>`,
-  ];
-  for (const v of rows) {
-    const d = v.details || {};
-    const fields = [
-      ["Job No", v.jobNo],
-      ["Metal", d.metal],
-      ["Quality", d.purity],
-      ["Color", d.color],
-      ["Type", d.diamondType],
-      ["Dia Quality", d.diaQly],
-      ["Dia Color", d.diaClr],
-      ["Gold WT", d.gwt],
-      ["Diamond WT", d.dwt],
-      ["Stone WT", d.swt],
-      ["Net WT", d.nwt],
-      ["Size", d.size],
-      ["Store", d.store],
-      ["Certificate", d.certificate],
-      ["Category", d.category],
-    ].filter((field): field is [string, string] => Boolean(field[1]?.trim()));
-    lines.push(
-      `<p>${fields
-        .map(
-          ([label, value]) =>
-            `<strong>${label}:</strong> ${escapeHtml(value.trim())}`,
-        )
-        .join("<br>\n")}</p>`,
-    );
-  }
-  if (variants.length > DESCRIPTION_JOB_CAP) {
-    lines.push(
-      `<p><em>+${variants.length - DESCRIPTION_JOB_CAP} more jobs — see variant metafields.</em></p>`,
-    );
-  }
-  return lines.join("\n");
+  const columns = DESCRIPTION_COLUMNS.filter(
+    (column) => column.always || rows.some((row) => column.cell(row)),
+  );
+  const head = columns
+    .map((column) => `<th>${escapeHtml(column.label)}</th>`)
+    .join("");
+  const body = rows
+    .map((row) => {
+      const cells = columns
+        .map((column) => {
+          const value = column.cell(row);
+          return `<td>${value ? escapeHtml(value) : "—"}</td>`;
+        })
+        .join("");
+      return `<tr>${cells}</tr>`;
+    })
+    .join("\n");
+  const more =
+    variants.length > DESCRIPTION_JOB_CAP
+      ? `\n<p>+${variants.length - DESCRIPTION_JOB_CAP} more jobs are on the variants.</p>`
+      : "";
+  const countLabel =
+    variants.length > DESCRIPTION_JOB_CAP
+      ? `${rows.length} of ${variants.length}`
+      : String(rows.length);
+  return `<h3>In Stock (${countLabel}) — ${escapeHtml(designNo)}</h3>
+<table border="1" cellpadding="6" cellspacing="0">
+<thead><tr>${head}</tr></thead>
+<tbody>
+${body}
+</tbody>
+</table>${more}`;
 }
 
 /** Stable Shopify tag for design lookup (retries / orphan recovery). */
