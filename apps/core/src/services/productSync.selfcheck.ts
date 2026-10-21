@@ -223,6 +223,29 @@ function installShopifyFetch(calls: string[]): typeof fetch {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
+    if (body.includes("productLiveState")) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            product: {
+              id: "gid://shopify/Product/99",
+              options: [{ name: "Job" }],
+              variants: {
+                nodes: [
+                  {
+                    id: "gid://shopify/ProductVariant/99",
+                    sku: "JOB-9",
+                    selectedOptions: [{ name: "Job", value: "JOB-9" }],
+                    inventoryItem: { id: "gid://shopify/InventoryItem/99" },
+                  },
+                ],
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
     if (body.includes("productCreate")) {
       return new Response(
         JSON.stringify({

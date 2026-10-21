@@ -497,11 +497,17 @@ export async function findShopifyProductByDesignNo(
   return matches[0]?.id ?? null;
 }
 
-const PRODUCT_VARIANTS_FOR_RECLAIM = /* GraphQL */ `
-  query productVariantsForReclaim($id: ID!) {
+// ponytail: one page of variants (Shopify max 250); a design with more live jobs needs cursor paging.
+const LIVE_VARIANT_PAGE = 250;
+
+const PRODUCT_LIVE_STATE = /* GraphQL */ `
+  query productLiveState($id: ID!) {
     product(id: $id) {
       id
-      variants(first: 100) {
+      options {
+        name
+      }
+      variants(first: ${LIVE_VARIANT_PAGE}) {
         nodes {
           id
           sku
@@ -518,9 +524,29 @@ const PRODUCT_VARIANTS_FOR_RECLAIM = /* GraphQL */ `
   }
 `;
 
-type ProductVariantsForReclaimData = {
+const PRODUCT_OPTIONS_CREATE = /* GraphQL */ `
+  mutation productOptionsCreate(
+    $productId: ID!
+    $options: [OptionCreateInput!]!
+    $variantStrategy: ProductOptionCreateVariantStrategy
+  ) {
+    productOptionsCreate(
+      productId: $productId
+      options: $options
+      variantStrategy: $variantStrategy
+    ) {
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+type ProductLiveStateData = {
   product?: {
     id?: string;
+    options?: Array<{ name?: string | null } | null> | null;
     variants?: {
       nodes?: Array<{
         id?: string;
@@ -532,42 +558,99 @@ type ProductVariantsForReclaimData = {
   } | null;
 };
 
-/** Load Job/SKU variants on a reclaimed product so retries update instead of re-create. */
-export async function listShopifyVariantsForReclaim(
+type LiveVariant = {
+  jobNo: string;
+  externalVariantId: string;
+  externalInventoryItemId?: string;
+};
+
+type LiveProductState = {
+  optionNames: string[];
+  variants: LiveVariant[];
+};
+
+const JOB_OPTION = "Job";
+/** Option Shopify gives a product that has no options (single "Default Title" variant). */
+const DEFAULT_OPTION = "Title";
+
+function isJobOption(name: string): boolean {
+  return name.trim().toLowerCase() === JOB_OPTION.toLowerCase();
+}
+
+/**
+ * What is on the Shopify product right now. Variant ids saved in Channels go
+ * stale when the merchant edits variants or options in Shopify admin, so
+ * updates reconcile against this instead.
+ */
+export async function readShopifyLiveProduct(
   client: ShopifyAdminClient,
   productId: string,
-): Promise<
-  Array<{
-    jobNo: string;
-    externalVariantId: string;
-    externalInventoryItemId?: string;
-  }>
-> {
-  const result = await client.graphql<ProductVariantsForReclaimData>(
-    PRODUCT_VARIANTS_FOR_RECLAIM,
-    { id: productId },
-  );
+): Promise<LiveProductState> {
+  const result = await client.graphql<ProductLiveStateData>(PRODUCT_LIVE_STATE, {
+    id: productId,
+  });
   throwGraphqlErrors(result.errors);
-  const nodes = result.data?.product?.variants?.nodes ?? [];
-  const out: Array<{
-    jobNo: string;
-    externalVariantId: string;
-    externalInventoryItemId?: string;
-  }> = [];
-  for (const n of nodes) {
+  const product = result.data?.product;
+  if (!product?.id) {
+    throw new ShopifyHttpError(404, "Shopify product not found");
+  }
+  const optionNames = (product.options ?? [])
+    .map((o) => String(o?.name || "").trim())
+    .filter(Boolean);
+  const variants: LiveVariant[] = [];
+  for (const n of product.variants?.nodes ?? []) {
     if (!n?.id) continue;
-    const jobOpt = (n.selectedOptions || []).find(
-      (o) => String(o?.name || "").trim().toLowerCase() === "job",
+    const jobOpt = (n.selectedOptions || []).find((o) =>
+      isJobOption(String(o?.name || "")),
     );
     const jobNo = String(jobOpt?.value || n.sku || "").trim();
-    if (!jobNo) continue;
-    out.push({
+    variants.push({
       jobNo,
       externalVariantId: n.id,
       externalInventoryItemId: n.inventoryItem?.id || undefined,
     });
   }
-  return out;
+  return { optionNames, variants };
+}
+
+/**
+ * Put the Job option back when the merchant removed it (product collapsed to
+ * one default variant). LEAVE_AS_IS links that variant to the first job, so
+ * the remaining jobs can be bulk-created. Other merchant options are not
+ * guessed at: the product needs fixing in Shopify (or deleting to re-import).
+ */
+async function ensureJobOption(
+  client: ShopifyAdminClient,
+  productId: string,
+  live: LiveProductState,
+  jobNos: string[],
+): Promise<LiveProductState> {
+  if (live.optionNames.some(isJobOption)) return live;
+  const onlyDefault = live.optionNames.every((name) => name === DEFAULT_OPTION);
+  if (!onlyDefault || live.variants.length > 1) {
+    throw new ShopifyHttpError(
+      409,
+      `Shopify product options were changed (${live.optionNames.join(", ")}). ` +
+        `DevJewels needs one "${JOB_OPTION}" option per piece; remove the other ` +
+        "options in Shopify or delete the product so it re-imports.",
+    );
+  }
+  console.warn("shopify_product_job_option_restored", {
+    productId,
+    jobCount: jobNos.length,
+  });
+  const created = await client.graphql<{
+    productOptionsCreate?: {
+      userErrors?: Array<{ field?: string[]; message: string }>;
+    };
+  }>(PRODUCT_OPTIONS_CREATE, {
+    productId,
+    options: [{ name: JOB_OPTION, values: jobNos.map((name) => ({ name })) }],
+    variantStrategy: "LEAVE_AS_IS",
+  });
+  throwGraphqlErrors(created.errors);
+  throwUserErrors(created.data?.productOptionsCreate?.userErrors, "productOptionsCreate");
+  return readShopifyLiveProduct(client, productId);
 }
 
 export async function createShopifyProduct(
@@ -592,14 +675,9 @@ export async function createShopifyProduct(
     if (input.onExternalProductId) {
       await input.onExternalProductId(existingId);
     }
-    const existingVariants = await listShopifyVariantsForReclaim(
-      client,
-      existingId,
-    );
     return updateShopifyProduct(client, {
       ...input,
       externalProductId: existingId,
-      existingVariants,
     });
   }
 
@@ -666,9 +744,10 @@ export async function createShopifyProduct(
 }
 
 /**
- * Update title/metafields; bulk-update prices on mapped variants;
- * bulk-create any new job_no variants not yet mapped;
- * bulk-delete stale placeholders / sold jobs (after desired variants exist).
+ * Update title/metafields, then reconcile variants against the live Shopify
+ * product (not saved Channels ids): bulk-update jobs already there, bulk-create
+ * missing jobs, bulk-delete everything else (after desired variants exist).
+ * input.existingVariants / removeVariants are ignored here; live state wins.
  */
 export async function updateShopifyProduct(
   client: ShopifyAdminClient,
@@ -682,12 +761,17 @@ export async function updateShopifyProduct(
   }
 
   const productId = input.externalProductId.trim();
-  const existingByJob = new Map(
-    (input.existingVariants ?? []).map((v) => [
-      v.jobNo.trim().toUpperCase(),
-      v,
-    ]),
+  const live = await ensureJobOption(
+    client,
+    productId,
+    await readShopifyLiveProduct(client, productId),
+    input.variants.map((v) => v.jobNo),
   );
+  const existingByJob = new Map<string, LiveVariant>();
+  for (const v of live.variants) {
+    const key = v.jobNo.trim().toUpperCase();
+    if (key && !existingByJob.has(key)) existingByJob.set(key, v);
+  }
 
   const descriptionHtml = jobDetailsDescriptionHtml(input.designNo, input.variants);
   const updateResult = await client.graphql<ProductUpdateData>(PRODUCT_UPDATE, {
@@ -768,13 +852,7 @@ export async function updateShopifyProduct(
   // Delete after desired variants exist so the product never drops to zero variants.
   // Keep Channels variant_mapping rows for delayed order reverse-lookup; Shopify
   // delete is best-effort (already-removed variants must not fail the sync).
-  const removeIds = [
-    ...new Set(
-      (input.removeVariants ?? [])
-        .map((v) => String(v.externalVariantId || "").trim())
-        .filter(Boolean),
-    ),
-  ];
+  const removeIds = live.variants.map((v) => v.externalVariantId);
   if (removeIds.length > 0 && resultVariants.length > 0) {
     const keepIds = new Set(resultVariants.map((v) => v.externalVariantId));
     const safeRemove = removeIds.filter((id) => !keepIds.has(id));

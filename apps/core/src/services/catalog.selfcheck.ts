@@ -218,6 +218,29 @@ async function main(): Promise<void> {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
+    if (body.includes("productLiveState")) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            product: {
+              id: "gid://shopify/Product/1",
+              options: [{ name: "Job" }],
+              variants: {
+                nodes: [
+                  {
+                    id: "gid://shopify/ProductVariant/11",
+                    sku: "JOB-1",
+                    selectedOptions: [{ name: "Job", value: "JOB-1" }],
+                    inventoryItem: { id: "gid://shopify/InventoryItem/21" },
+                  },
+                ],
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
     // productCreate GraphQL
     if (body.includes("productCreate")) {
       return new Response(
