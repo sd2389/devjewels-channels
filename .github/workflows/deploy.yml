@@ -50,7 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
-          for key in DATABASE_URL CHANNELS_SERVICE_TOKEN DEVJEWELS_API_BASE_URL AWS_SECURITY_GROUP_IDS SHOPIFY_PUBLIC_API_KEY SHOPIFY_PUBLIC_API_SECRET; do
+          for key in DATABASE_URL CHANNELS_SERVICE_TOKEN DEVJEWELS_API_BASE_URL AWS_SECURITY_GROUP_IDS SHOPIFY_PUBLIC_API_KEY SHOPIFY_PUBLIC_API_SECRET SHOPIFY_CUSTOM_INSTALL_API_KEY SHOPIFY_CUSTOM_INSTALL_API_SECRET; do
             if [ -z "${!key:-}" ]; then
               echo "Missing required Infisical secret: $key"
               missing=1

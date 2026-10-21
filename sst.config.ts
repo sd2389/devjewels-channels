@@ -71,6 +71,10 @@ export default $config({
       SHOPIFY_PUBLIC_API_KEY: process.env.SHOPIFY_PUBLIC_API_KEY?.trim() || "",
       SHOPIFY_PUBLIC_API_SECRET:
         process.env.SHOPIFY_PUBLIC_API_SECRET?.trim() || "",
+      SHOPIFY_CUSTOM_INSTALL_API_KEY:
+        process.env.SHOPIFY_CUSTOM_INSTALL_API_KEY?.trim() || "",
+      SHOPIFY_CUSTOM_INSTALL_API_SECRET:
+        process.env.SHOPIFY_CUSTOM_INSTALL_API_SECRET?.trim() || "",
       SHOPIFY_APP_STORE_FALLBACK_CUSTOMER_ID:
         process.env.SHOPIFY_APP_STORE_FALLBACK_CUSTOMER_ID?.trim() || "",
       SHOPIFY_API_VERSION: process.env.SHOPIFY_API_VERSION?.trim() || "2025-01",

@@ -10,6 +10,7 @@ import {
   beginShopifyOAuthInstall,
   exchangeShopifyOAuthCode,
   getShopifyOAuthConfig,
+  getShopifyOAuthConfigByClientId,
   getShopifyOAuthPublicStatus,
   parseShopifyOAuthAppCredentials,
   saveShopifyOAuthAppCredentials,
@@ -354,6 +355,23 @@ async function main(): Promise<void> {
   if (!again.every((r) => !r.created)) {
     throw new Error("expected reuse of existing webhooks");
   }
+
+  process.env.SHOPIFY_API_KEY = "key_test";
+  process.env.SHOPIFY_API_SECRET = "secret_test";
+  process.env.SHOPIFY_CUSTOM_INSTALL_API_KEY = "584d55743051771c2e8c299d1e702a2d";
+  process.env.SHOPIFY_CUSTOM_INSTALL_API_SECRET = "custom_install_secret";
+  const customInstall = await getShopifyOAuthConfigByClientId(
+    "584d55743051771c2e8c299d1e702a2d",
+  );
+  if (customInstall?.apiSecret !== "custom_install_secret") {
+    throw new Error("custom install app secret was not loaded");
+  }
+  const stillPrimary = await getShopifyOAuthConfig();
+  if (stillPrimary.apiKey !== "key_test") {
+    throw new Error("custom install app must not replace the primary Shopify app");
+  }
+  delete process.env.SHOPIFY_CUSTOM_INSTALL_API_KEY;
+  delete process.env.SHOPIFY_CUSTOM_INSTALL_API_SECRET;
 
   setShopifyMetaStoreForTests(null);
   await fs.rm(emptyVault, { recursive: true, force: true });
