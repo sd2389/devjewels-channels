@@ -100,6 +100,7 @@ async function collectEligibleDesigns(
     imageUrls: string[];
     productType?: string;
     tags: string[];
+    stoneWt?: string;
   }>
 > {
   const out: Array<{
@@ -109,6 +110,7 @@ async function collectEligibleDesigns(
     imageUrls: string[];
     productType?: string;
     tags: string[];
+    stoneWt?: string;
   }> = [];
   let afterId: number | null = null;
   while (out.length < maxDesigns) {
@@ -139,6 +141,10 @@ async function collectEligibleDesigns(
         }),
         productType: taxonomy.productType,
         tags: taxonomy.tags,
+        stoneWt:
+          item.swt != null && String(item.swt).trim() !== ""
+            ? String(item.swt).trim()
+            : undefined,
       });
       if (out.length >= maxDesigns) break;
     }
@@ -166,6 +172,7 @@ async function importOneDesign(input: {
   imageUrls: string[];
   productType?: string;
   tags: string[];
+  stoneWt?: string;
 }): Promise<"ok" | "skipped" | "failed"> {
   const inventory = await deverpClient.getInventory(input.designNo);
   // Live jobs only; OOS → design_no placeholder. Drops leftover placeholders on re-sync.
@@ -199,6 +206,7 @@ async function importOneDesign(input: {
       details: detailsFromInventoryJob(
         j as Record<string, unknown>,
         input.productType,
+        input.stoneWt,
       ),
     });
   }
@@ -461,6 +469,7 @@ export async function runCatalogImport(
       imageUrls: design.imageUrls,
       productType: design.productType,
       tags: design.tags,
+      stoneWt: design.stoneWt,
     });
     if (outcome === "failed") failed += 1;
     else if (outcome === "skipped") skipped += 1;

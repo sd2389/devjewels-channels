@@ -240,6 +240,7 @@ export async function runProductSyncJob(
   let productType: string | undefined;
   let tags: string[] = [];
   let category = "";
+  let stoneWt = "";
   try {
     const product = await deverpClient.getProduct(designNo, connection.customer_id!);
     title = String(product.titleline || designNo).trim() || designNo;
@@ -260,6 +261,7 @@ export async function runProductSyncJob(
     productType = taxonomy.productType;
     tags = taxonomy.tags;
     category = String(product.category || productType || "").trim();
+    stoneWt = String(product.swt ?? "").trim();
   } catch (err) {
     await writeSyncLog({
       connectionId: job.connectionId,
@@ -313,7 +315,11 @@ export async function runProductSyncJob(
       sku: jobNo,
       price: unitPrice,
       quantity: canViewInventory && !resolved.outOfStock ? 1 : 0,
-      details: detailsFromInventoryJob(j as Record<string, unknown>, category),
+      details: detailsFromInventoryJob(
+        j as Record<string, unknown>,
+        category,
+        stoneWt,
+      ),
     });
   }
 
