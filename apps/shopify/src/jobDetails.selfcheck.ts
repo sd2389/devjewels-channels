@@ -60,16 +60,36 @@ export function shopifyJobDetailsSelfcheck(): void {
     "store is a labelled field",
   );
   assert(
-    html?.includes("<strong>Gwt:</strong> 11.680 gms"),
-    "gwt field keeps unit",
+    html?.includes("<strong>Gold WT:</strong> 11.680 gms"),
+    "gold weight keeps unit and customer-page label",
   );
+  assert(!html?.includes("<strong>Purity:</strong>"), "quality label is not Purity");
   assert(
     html?.includes("<strong>Job No:</strong> 18375<br>"),
     "fields are separated by line breaks",
   );
   assert(!html?.includes("<table"), "description must not use tables (theme-unsafe)");
   assert(!html?.includes(" · "), "description must not use inline separators");
-  assert(!html?.includes("<strong>Purity:</strong>"), "empty fields must be omitted");
+  assert(!html?.includes("<strong>Quality:</strong>"), "empty fields must be omitted");
+  const rich = jobDetailsDescriptionHtml("DJ-2", [
+    {
+      jobNo: "18376",
+      price: 100,
+      quantity: 1,
+      details: {
+        diamondType: "Lab Grown",
+        diaQly: "VVS-VS",
+        diaClr: "D-E-F",
+        dwt: "1.200 cts",
+        swt: "0.450 cts",
+        certificate: "GIA, 123",
+      },
+    },
+  ]);
+  assert(rich?.includes("<strong>Type:</strong> Lab Grown"), "type label");
+  assert(rich?.includes("<strong>Stone WT:</strong> 0.450 cts"), "stone weight");
+  assert(rich?.includes("<strong>Certificate:</strong> GIA, 123"), "certificate");
+  assert(rich?.includes("<strong>Dia Quality:</strong> VVS-VS"), "dia quality label");
   assert(!html?.includes("<script"), "description must not allow raw tags from values");
 }
 

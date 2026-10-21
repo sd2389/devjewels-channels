@@ -76,10 +76,13 @@ export function variantMetafields(
   pushMetafield(out, "color", details?.color);
   pushMetafield(out, "dia_qly", details?.diaQly);
   pushMetafield(out, "dia_clr", details?.diaClr);
+  pushMetafield(out, "diamond_type", details?.diamondType);
   pushMetafield(out, "size", details?.size);
   pushMetafield(out, "gwt", details?.gwt);
   pushMetafield(out, "nwt", details?.nwt);
   pushMetafield(out, "dwt", details?.dwt);
+  pushMetafield(out, "swt", details?.swt);
+  pushMetafield(out, "certificate", details?.certificate?.slice(0, 255));
   return out;
 }
 
@@ -109,17 +112,20 @@ export function jobDetailsDescriptionHtml(
     const d = v.details || {};
     const fields = [
       ["Job No", v.jobNo],
-      ["Store", d.store],
-      ["Category", d.category],
       ["Metal", d.metal],
-      ["Purity", d.purity],
+      ["Quality", d.purity],
       ["Color", d.color],
-      ["Dia. Qly", d.diaQly],
-      ["Dia. Clr", d.diaClr],
+      ["Type", d.diamondType],
+      ["Dia Quality", d.diaQly],
+      ["Dia Color", d.diaClr],
+      ["Gold WT", d.gwt],
+      ["Diamond WT", d.dwt],
+      ["Stone WT", d.swt],
+      ["Net WT", d.nwt],
       ["Size", d.size],
-      ["Gwt", d.gwt],
-      ["Nwt", d.nwt],
-      ["Dwt", d.dwt],
+      ["Store", d.store],
+      ["Certificate", d.certificate],
+      ["Category", d.category],
     ].filter((field): field is [string, string] => Boolean(field[1]?.trim()));
     lines.push(
       `<p>${fields

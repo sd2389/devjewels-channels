@@ -16,10 +16,15 @@ export type ChannelJobVariantDetails = {
   color?: string;
   diaQly?: string;
   diaClr?: string;
+  /** Lab Grown / Natural — same label as the customer stock table Type column. */
+  diamondType?: string;
   size?: string;
   gwt?: string;
   nwt?: string;
   dwt?: string;
+  /** Design stone weight (customer stock table Stone WT). */
+  swt?: string;
+  certificate?: string;
 };
 
 export type InventoryUpdateInput = DesignJobKey & {
