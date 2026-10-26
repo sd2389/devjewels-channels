@@ -10,6 +10,7 @@ import {
 } from "@devjewels-channels/shopify/auth";
 import { connectShopifyStore } from "@/services/connectShopifyService";
 import { resolveMerchantInstallOAuthConfig } from "@/services/merchantInstallOauth";
+import { merchantOAuthFailureTarget } from "../merchantOAuthFailure";
 import { json, redirect } from "../response";
 
 /**
@@ -105,6 +106,7 @@ export async function getShopifyAuthCallback(request: Request): Promise<Response
   }
 
   const merchantFlow = isMerchantOAuthState(state);
+  const oauthCustomerId = parseCustomerIdFromOAuthState(state);
 
   const merchantErrorPath = (errorCode: string) =>
     merchantFlow ? `/connect/success?shopify_error=${errorCode}` : `/?shopify_error=${errorCode}`;
@@ -115,7 +117,7 @@ export async function getShopifyAuthCallback(request: Request): Promise<Response
       return go(merchantErrorPath("invalid_hmac"), merchantFlow);
     }
 
-    const customerId = parseCustomerIdFromOAuthState(state);
+    const customerId = oauthCustomerId;
     if (customerId == null) {
       return go(merchantErrorPath("missing_customer"), merchantFlow);
     }
@@ -152,20 +154,24 @@ export async function getShopifyAuthCallback(request: Request): Promise<Response
       return go(merchantErrorPath("oauth_not_configured"), merchantFlow);
     }
     const message = err instanceof Error ? err.message : "";
-    if (/invalid or expired oauth state|shop mismatch/i.test(message)) {
+    const fallbackRaw = optionalProcessEnv("SHOPIFY_APP_STORE_FALLBACK_CUSTOMER_ID") || "";
+    const fallbackCustomerId = Number(fallbackRaw);
+    const target = merchantOAuthFailureTarget({
+      merchantFlow,
+      customerId: oauthCustomerId,
+      fallbackCustomerId:
+        Number.isInteger(fallbackCustomerId) && fallbackCustomerId > 0
+          ? fallbackCustomerId
+          : null,
+      message,
+    });
+    if (target === "invalid_state") {
       return go(merchantErrorPath("invalid_state"), merchantFlow);
     }
-    if (/already connected|another customer|API key|already has a channel connection/i.test(message)) {
-      // Public App Store install may OAuth with the shared review fallback customer
-      // after that customer already owns a different shop. Do not steal the binding;
-      // OAuth itself succeeded — merchant finishes via Channels with their customer.
-      if (
-        merchantFlow &&
-        /already has a channel connection/i.test(message)
-      ) {
-        return go("/connect/success?installed=1", true);
-      }
-      return go(merchantErrorPath("connect_failed"), merchantFlow);
+    if (target === "installed") {
+      // App Store review (and a customer who already has a shop) still installed
+      // the Shopify app. Catalog binding stays a staff step. An error page fails 2.1.1.
+      return go("/connect/success?installed=1", true);
     }
     console.warn("shopify_oauth_callback_failed", {
       shop: shop.trim().toLowerCase(),

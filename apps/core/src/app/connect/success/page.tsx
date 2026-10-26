@@ -60,6 +60,22 @@ export default async function ConnectSuccessPage({ searchParams }: PageProps) {
         </>
       ) : showInstalled ? (
         <>
+          <div
+            style={{
+              width: 56,
+              height: 56,
+              margin: "0 auto 1.25rem",
+              borderRadius: "50%",
+              background: "rgba(34, 197, 94, 0.15)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: "1.75rem",
+            }}
+            aria-hidden
+          >
+            ✓
+          </div>
           <h1 style={{ fontSize: "1.35rem", fontWeight: 600, margin: "0 0 0.75rem" }}>
             {CONNECT_INSTALLED_TITLE}
           </h1>
