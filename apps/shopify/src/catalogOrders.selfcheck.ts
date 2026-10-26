@@ -73,19 +73,22 @@ async function main(): Promise<void> {
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (body.includes("productVariantsForReclaim")) {
+      if (body.includes("productLiveState")) {
+        const orphan = body.includes("Product/orphan");
+        const suffix = orphan ? "orphan-a" : "9";
         return new Response(
           JSON.stringify({
             data: {
               product: {
-                id: "gid://shopify/Product/orphan",
+                id: orphan ? "gid://shopify/Product/orphan" : "gid://shopify/Product/9",
+                options: [{ name: "Job" }],
                 variants: {
                   nodes: [
                     {
-                      id: "gid://shopify/ProductVariant/orphan-a",
+                      id: `gid://shopify/ProductVariant/${suffix}`,
                       sku: "JOB-A",
                       selectedOptions: [{ name: "Job", value: "JOB-A" }],
-                      inventoryItem: { id: "gid://shopify/InventoryItem/orphan-a" },
+                      inventoryItem: { id: `gid://shopify/InventoryItem/${suffix}` },
                     },
                   ],
                 },
@@ -256,7 +259,146 @@ async function main(): Promise<void> {
     throw new Error("adding a live job must send Job optionValues");
   }
 
+  await merchantEditedProductSelfcheck(updateShopifyProduct);
+
   console.log("shopify catalogOrders.selfcheck ok");
+}
+
+/**
+ * Merchant removed the Job option in Shopify admin: the product collapsed to one
+ * "Default Title" variant and every saved variant id is gone. Update must restore
+ * the option and rebuild variants, not fail on stale ids.
+ */
+async function merchantEditedProductSelfcheck(
+  updateShopifyProduct: typeof import("./products").updateShopifyProduct,
+): Promise<void> {
+  const calls: string[] = [];
+  let optionsRestored = false;
+  const ok = (data: unknown) =>
+    new Response(JSON.stringify({ data }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  const client = createShopifyClient({
+    shopDomain: "edited.myshopify.com",
+    accessToken: "shpat_x",
+    fetchImpl: (async (_url, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      calls.push(body);
+      if (body.includes("productLiveState")) {
+        return ok({
+          product: {
+            id: "gid://shopify/Product/50",
+            options: [{ name: optionsRestored ? "Job" : "Title" }],
+            variants: {
+              nodes: [
+                {
+                  id: "gid://shopify/ProductVariant/default",
+                  sku: "",
+                  selectedOptions: [
+                    optionsRestored
+                      ? { name: "Job", value: "J1" }
+                      : { name: "Title", value: "Default Title" },
+                  ],
+                  inventoryItem: { id: "gid://shopify/InventoryItem/default" },
+                },
+              ],
+            },
+          },
+        });
+      }
+      if (body.includes("productOptionsCreate")) {
+        optionsRestored = true;
+        return ok({ productOptionsCreate: { userErrors: [] } });
+      }
+      return ok({
+        productUpdate: { product: { id: "gid://shopify/Product/50" }, userErrors: [] },
+        productVariantsBulkUpdate: {
+          productVariants: [
+            {
+              id: "gid://shopify/ProductVariant/default",
+              sku: "J1",
+              inventoryItem: { id: "gid://shopify/InventoryItem/default" },
+            },
+          ],
+          userErrors: [],
+        },
+        productVariantsBulkCreate: {
+          productVariants: [
+            {
+              id: "gid://shopify/ProductVariant/new-j2",
+              sku: "J2",
+              inventoryItem: { id: "gid://shopify/InventoryItem/new-j2" },
+            },
+          ],
+          userErrors: [],
+        },
+        productVariantsBulkDelete: { userErrors: [] },
+      });
+    }) as typeof fetch,
+  });
+
+  const result = await updateShopifyProduct(client, {
+    connectionId: "c",
+    designNo: "D50",
+    title: "D50",
+    externalProductId: "gid://shopify/Product/50",
+    variants: [
+      { jobNo: "J1", price: 10, quantity: 1 },
+      { jobNo: "J2", price: 11, quantity: 1 },
+    ],
+    existingVariants: [
+      { jobNo: "J1", externalVariantId: "gid://shopify/ProductVariant/stale-1" },
+      { jobNo: "J2", externalVariantId: "gid://shopify/ProductVariant/stale-2" },
+    ],
+  });
+  if (!optionsRestored) {
+    throw new Error("update must restore the Job option the merchant removed");
+  }
+  if (calls.some((b) => b.includes("stale-1") || b.includes("stale-2"))) {
+    throw new Error("update must not send saved variant ids that Shopify no longer has");
+  }
+  const byJob = Object.fromEntries(result.variants.map((v) => [v.jobNo, v.externalVariantId]));
+  if (byJob.J1 !== "gid://shopify/ProductVariant/default") {
+    throw new Error(`J1 should reuse the surviving variant: ${JSON.stringify(byJob)}`);
+  }
+  if (byJob.J2 !== "gid://shopify/ProductVariant/new-j2") {
+    throw new Error(`J2 should be re-created: ${JSON.stringify(byJob)}`);
+  }
+
+  // Merchant added their own options: do not guess, fail with an actionable message.
+  const custom = createShopifyClient({
+    shopDomain: "custom.myshopify.com",
+    accessToken: "shpat_x",
+    fetchImpl: (async (_url, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      if (body.includes("productLiveState")) {
+        return ok({
+          product: {
+            id: "gid://shopify/Product/51",
+            options: [{ name: "Metal" }],
+            variants: { nodes: [{ id: "gid://shopify/ProductVariant/m1", sku: "" }] },
+          },
+        });
+      }
+      return ok({ productUpdate: { product: { id: "gid://shopify/Product/51" }, userErrors: [] } });
+    }) as typeof fetch,
+  });
+  let message = "";
+  try {
+    await updateShopifyProduct(custom, {
+      connectionId: "c",
+      designNo: "D51",
+      title: "D51",
+      externalProductId: "gid://shopify/Product/51",
+      variants: [{ jobNo: "J9", price: 10, quantity: 1 }],
+    });
+  } catch (err) {
+    message = err instanceof Error ? err.message : String(err);
+  }
+  if (!message.includes("options were changed")) {
+    throw new Error(`expected options-changed error, got: ${message || "no error"}`);
+  }
 }
 
 main().catch((err) => {
