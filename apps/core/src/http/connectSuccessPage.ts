@@ -70,7 +70,7 @@ export function renderConnectSuccessHtml(input: {
 </head>
 <body>
   <main class="card">
-    ${ok ? `<div class="ok" aria-hidden="true">✓</div>` : ""}
+    ${ok || installed ? `<div class="ok" aria-hidden="true">✓</div>` : ""}
     <h1>${escapeHtml(title)}</h1>
     <p>${escapeHtml(body)}</p>
     <p class="foot">Questions? <a href="mailto:support@devjewels.com">Contact DevJewels</a></p>
