@@ -181,6 +181,7 @@ async function main(): Promise<void> {
       sync_inventory: true,
       sync_price: true,
       sync_products: true,
+      sync_product_content: false,
       sync_orders: true,
       is_active: true,
     },

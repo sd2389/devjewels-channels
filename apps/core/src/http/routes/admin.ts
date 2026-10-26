@@ -40,6 +40,7 @@ export async function getAdminConnections(req: Request): Promise<Response> {
         markup_value: c.connection.markup_value,
         sync_inventory: c.connection.sync_inventory,
         sync_products: c.connection.sync_products,
+        sync_product_content: c.connection.sync_product_content,
         shop_domain: c.shopDomain,
         locations: c.locations,
         primary_location_id:
@@ -171,6 +172,7 @@ export async function postAdminConnectionsShopify(req: Request): Promise<Respons
           markup_value: result.connection.markup_value,
           sync_inventory: result.connection.sync_inventory,
           sync_products: result.connection.sync_products,
+          sync_product_content: result.connection.sync_product_content,
         },
         shop_domain: result.shopDomain,
         locations: result.locations,

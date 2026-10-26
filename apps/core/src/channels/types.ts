@@ -30,6 +30,11 @@ export type ChannelJobVariantDetails = {
 export type InventoryUpdateInput = DesignJobKey & {
   connectionId: string;
   quantity: number;
+  /**
+   * DevJewels wholesale / unit cost for Shopify inventoryItem.cost.
+   * Never the storefront selling price. Omit to leave cost unchanged.
+   */
+  unitCost?: number;
   /** Optional external location / warehouse hint (platform-specific). */
   locationHint?: string;
   /** Resolved from variant_mapping before adapter call when available. */

@@ -162,6 +162,8 @@ async function importOneDesign(input: {
   canViewPrices: boolean;
   canViewInventory: boolean;
   syncInventory: boolean;
+  /** When false, mapped products get inventory qty + cost only. */
+  syncProductContent: boolean;
   markupMode?: string | null;
   markupValue?: number | null;
   markupBps?: number | null;
@@ -187,11 +189,12 @@ async function importOneDesign(input: {
   const variants = [];
   for (const j of jobs) {
     const jobNo = String(j.job_no).trim();
+    const wholesaleCost = parsePrice(j.totamt ?? input.defaultPrice);
     const price = await resolveChannelVariantPrice({
       customerId: input.customerId,
       designNo: input.designNo,
       jobNo,
-      fallbackPrice: parsePrice(j.totamt ?? input.defaultPrice),
+      fallbackPrice: wholesaleCost,
       canViewPrices: input.canViewPrices,
       markupMode: input.markupMode,
       markupValue: input.markupValue,
@@ -202,6 +205,7 @@ async function importOneDesign(input: {
       jobNo,
       sku: jobNo,
       price,
+      wholesaleCost,
       quantity: outOfStock ? 0 : 1,
       details: detailsFromInventoryJob(
         j as Record<string, unknown>,
@@ -247,6 +251,35 @@ async function importOneDesign(input: {
         input.connectionId,
         input.designNo,
       );
+      if (!input.syncProductContent) {
+        if (input.canViewInventory && input.syncInventory) {
+          for (const mapped of allMapped) {
+            const live = variants.find(
+              (v) =>
+                v.jobNo.trim().toUpperCase() ===
+                mapped.job_no.trim().toUpperCase(),
+            );
+            await enqueueInventorySync({
+              kind: "inventory.sync",
+              connectionId: input.connectionId,
+              platform: input.platform,
+              designNo: input.designNo,
+              jobNo: mapped.job_no,
+              quantity: live?.quantity ?? 0,
+              ...(live != null ? { unitCost: live.wholesaleCost } : {}),
+            });
+          }
+        }
+        await writeSyncLog({
+          connectionId: input.connectionId,
+          platform: input.platform,
+          jobType: "product",
+          status: "SUCCESS",
+          designNo: input.designNo,
+          message: `inventory_only mapped=${allMapped.length} (content sync off)`,
+        });
+        return "ok";
+      }
       const existingVariants = [];
       for (const v of variants) {
         const mapped = allMapped.find(
@@ -459,6 +492,7 @@ export async function runCatalogImport(
       canViewPrices: Boolean(entitlements.permissions.can_view_prices),
       canViewInventory: Boolean(entitlements.permissions.can_view_inventory),
       syncInventory: connection.sync_inventory,
+      syncProductContent: connection.sync_product_content,
       markupMode: connection.markup_mode,
       markupValue: connection.markup_value,
       markupBps: connection.markup_bps,

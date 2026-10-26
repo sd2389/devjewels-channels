@@ -17,7 +17,10 @@ import {
 import { resolveShopifyCredentials } from "../../core/src/security/secrets";
 import { safeErrorMessage } from "../../core/src/security/redact";
 import { createShopifyClient, ShopifyRateLimitError } from "./client";
-import { setShopifyInventoryLevel } from "./inventory";
+import {
+  setShopifyInventoryCost,
+  setShopifyInventoryLevel,
+} from "./inventory";
 import { getShopifyMetaStore } from "./meta";
 import {
   createShopifyProduct,
@@ -196,9 +199,16 @@ export const shopifyAdapter: CommerceChannel = {
       jobNo: input.jobNo,
       shopDomain: credentials.shopDomain,
       quantity: input.quantity,
+      hasUnitCost: input.unitCost != null,
     });
 
     try {
+      if (input.unitCost != null && Number.isFinite(input.unitCost)) {
+        await setShopifyInventoryCost(client, {
+          inventoryItemId,
+          cost: input.unitCost,
+        });
+      }
       await setShopifyInventoryLevel(client, {
         inventoryItemId,
         locationId,

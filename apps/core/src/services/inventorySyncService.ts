@@ -137,6 +137,9 @@ export async function runInventorySyncJob(
       designNo: job.designNo,
       jobNo: job.jobNo,
       quantity: job.quantity,
+      ...(job.unitCost != null && Number.isFinite(job.unitCost)
+        ? { unitCost: job.unitCost }
+        : {}),
       externalInventoryItemId: mapping.external_inventory_item_id,
       credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
     });

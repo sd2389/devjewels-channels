@@ -65,6 +65,7 @@ function connectionA(overrides: Partial<ConnectionRow> = {}): ConnectionRow {
     sync_inventory: true,
     sync_price: true,
     sync_products: true,
+    sync_product_content: false,
     sync_orders: true,
     ...overrides,
   };
@@ -92,6 +93,7 @@ function connectionB(): ConnectionRow {
     sync_inventory: true,
     sync_price: true,
     sync_products: true,
+    sync_product_content: false,
     sync_orders: true,
   };
 }
@@ -407,6 +409,7 @@ async function main(): Promise<void> {
     }
     const mapped = await productMaps.getByDesign(CONN_A, "PS-1");
     if (!mapped) throw new Error("expected mapping after create");
+    drainMemoryInventoryQueue();
 
     const updated = await runProductSyncJob({
       kind: "product.sync",
@@ -417,9 +420,44 @@ async function main(): Promise<void> {
     if (updated !== "UPDATED") {
       throw new Error(`expected UPDATED, got ${updated}`);
     }
-    if (!calls.some((c) => c.includes("productUpdate"))) {
-      throw new Error("expected productUpdate GraphQL on second sync");
+    const updateCalls = calls.filter((c) => c.includes("productUpdate("));
+    if (updateCalls.length > 0) {
+      throw new Error(
+        "default sync must not call productUpdate — merchant owns titles/prices/content",
+      );
     }
+    const invJobs = drainMemoryInventoryQueue();
+    if (invJobs.length < 1) {
+      throw new Error("inventory-only update must enqueue inventory sync");
+    }
+    if (invJobs.some((j) => j.unitCost == null)) {
+      throw new Error("inventory-only update must pass wholesale unitCost");
+    }
+
+    // Opt-in content sync still rewrites the Shopify product when requested.
+    setConnectionStoreForTests(
+      createMemoryConnectionStore([
+        connectionA({ sync_product_content: true }),
+        connectionB(),
+      ]),
+    );
+    const contentCallsBefore = calls.length;
+    const contentUpdated = await runProductSyncJob({
+      kind: "product.sync",
+      connectionId: CONN_A,
+      platform: "SHOPIFY",
+      designNo: "PS-1",
+    });
+    if (contentUpdated !== "UPDATED") {
+      throw new Error(`expected UPDATED with content sync, got ${contentUpdated}`);
+    }
+    if (!calls.slice(contentCallsBefore).some((c) => c.includes("productUpdate("))) {
+      throw new Error("sync_product_content=true must call productUpdate");
+    }
+    drainMemoryInventoryQueue();
+    setConnectionStoreForTests(
+      createMemoryConnectionStore([connectionA(), connectionB()]),
+    );
 
     // Denied path: sync_products off
     setConnectionStoreForTests(

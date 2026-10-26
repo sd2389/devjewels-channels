@@ -112,12 +112,15 @@ export function formatDescriptionPrice(amount: number): string {
   return `$${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${frac}`;
 }
 
-/** Same columns as the customer product-page stock table, in that order. */
+/**
+ * One row per in-stock piece, same columns as the customer stock table.
+ * Job No is the piece. Metal, Quality, and Color use the same words as the picker.
+ */
 const DESCRIPTION_COLUMNS: DescriptionColumn[] = [
   { label: "Job No", always: true, cell: (v) => descriptionCell(v.jobNo) },
-  { label: "Metal", always: true, cell: (v) => descriptionCell(v.details?.metal) },
-  { label: "Quality", always: true, cell: (v) => descriptionCell(v.details?.purity) },
-  { label: "Color", always: true, cell: (v) => descriptionCell(v.details?.color) },
+  { label: "Metal", always: true, cell: (v) => displayToken(v.details?.metal || "") },
+  { label: "Quality", always: true, cell: (v) => displayToken(v.details?.purity || "") },
+  { label: "Color", always: true, cell: (v) => displayToken(v.details?.color || "") },
   { label: "Type", always: false, cell: (v) => descriptionCell(v.details?.diamondType) },
   { label: "Dia Quality", always: true, cell: (v) => descriptionCell(v.details?.diaQly) },
   { label: "Dia Color", always: true, cell: (v) => descriptionCell(v.details?.diaClr) },
@@ -163,7 +166,7 @@ export function jobDetailsDescriptionHtml(
     .join("\n");
   const more =
     variants.length > DESCRIPTION_JOB_CAP
-      ? `\n<p>+${variants.length - DESCRIPTION_JOB_CAP} more jobs are on the variants.</p>`
+      ? `\n<p>+${variants.length - DESCRIPTION_JOB_CAP} more pieces are in stock.</p>`
       : "";
   const countLabel =
     variants.length > DESCRIPTION_JOB_CAP
@@ -176,6 +179,109 @@ export function jobDetailsDescriptionHtml(
 ${body}
 </tbody>
 </table>${more}`;
+}
+
+/** Customer-facing variant option. Legacy syncs used "Job" (the job number). */
+export const STOREFRONT_OPTION = "Metal";
+const LEGACY_JOB_OPTION = "Job";
+/** Shopify's placeholder when a product has no real options. Themes hide this picker. */
+const DEFAULT_OPTION = "Title";
+const OPTION_VALUE_MAX = 255;
+
+const COLOR_WORD: Record<string, string> = {
+  w: "White",
+  y: "Yellow",
+  r: "Rose",
+};
+
+function displayToken(raw: string): string {
+  return raw
+    .trim()
+    .split(/\s+/)
+    .map((word) => {
+      if (!word) return "";
+      if (word.length === 1) {
+        const mapped = COLOR_WORD[word.toLowerCase()];
+        if (mapped) return mapped;
+      }
+      if (/\d/.test(word)) return word.toUpperCase();
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .filter(Boolean)
+    .join(" ");
+}
+
+function clipOptionValue(raw: string): string {
+  const s = raw.trim();
+  return s.length <= OPTION_VALUE_MAX ? s : s.slice(0, OPTION_VALUE_MAX);
+}
+
+/**
+ * What the customer should see for one piece: "14K White Gold", "18K Rose Gold", "Platinum".
+ * Empty when the job has no metal, karat, or color.
+ */
+export function storefrontMetalLabel(details?: {
+  metal?: string;
+  purity?: string;
+  color?: string;
+}): string {
+  const metal = displayToken(details?.metal || "");
+  const purity = displayToken(details?.purity || "");
+  const color = displayToken(details?.color || "");
+  if (!metal && !purity && !color) return "";
+  const colorInMetal =
+    color.length > 0 && metal.toLowerCase().includes(color.toLowerCase());
+  return [purity, colorInMetal ? "" : color, metal].filter(Boolean).join(" ");
+}
+
+/**
+ * One picker when a design has two or more pieces. Values are metal + karat + color.
+ * Same metal on two pieces adds size, then job number, so Shopify option values stay unique.
+ * No metal data keeps the legacy Job option. A single piece returns null (picker hidden).
+ */
+export function storefrontOptionPlan(
+  variants: Array<{
+    jobNo: string;
+    details?: { metal?: string; purity?: string; color?: string; size?: string };
+  }>,
+): { optionName: string; byJob: Map<string, string> } | null {
+  const rows = variants
+    .map((v) => ({
+      jobNo: v.jobNo.trim(),
+      base: storefrontMetalLabel(v.details),
+      size: displayToken(v.details?.size || ""),
+    }))
+    .filter((r) => r.jobNo);
+  if (rows.length < 2) return null;
+  if (!rows.some((r) => r.base)) {
+    return {
+      optionName: LEGACY_JOB_OPTION,
+      byJob: new Map(rows.map((r) => [r.jobNo, clipOptionValue(r.jobNo)])),
+    };
+  }
+  const baseCount = new Map<string, number>();
+  for (const r of rows) {
+    const key = r.base.toLowerCase();
+    baseCount.set(key, (baseCount.get(key) ?? 0) + 1);
+  }
+  const preliminary = rows.map((r) => {
+    if (!r.base) return r.jobNo;
+    const dup = (baseCount.get(r.base.toLowerCase()) ?? 0) > 1;
+    if (!dup) return r.base;
+    if (r.size) return `${r.base} · ${r.size}`;
+    return `${r.base} · ${r.jobNo}`;
+  });
+  const seen = new Map<string, number>();
+  const byJob = new Map<string, string>();
+  rows.forEach((r, i) => {
+    let label = preliminary[i] || r.jobNo;
+    const key = label.toLowerCase();
+    const n = (seen.get(key) ?? 0) + 1;
+    seen.set(key, n);
+    if (n > 1) label = `${label} · ${r.jobNo}`;
+    byJob.set(r.jobNo, clipOptionValue(label));
+  });
+  return { optionName: STOREFRONT_OPTION, byJob };
 }
 
 /** Stable Shopify tag for design lookup (retries / orphan recovery). */
@@ -215,14 +321,14 @@ function shopifyTaxonomyFields(input: {
 function bulkVariantInput(
   designNo: string,
   v: CreateProductInput["variants"][number],
-  withOption: boolean,
+  option?: { name: string; value: string },
 ) {
   return {
     price: String(v.price),
     inventoryItem: { sku: v.sku || v.jobNo },
     metafields: variantMetafields(designNo, v.jobNo, v.details),
-    ...(withOption
-      ? { optionValues: [{ optionName: "Job", name: v.jobNo }] }
+    ...(option
+      ? { optionValues: [{ optionName: option.name, name: option.value }] }
       : {}),
   };
 }
@@ -505,7 +611,14 @@ const PRODUCT_LIVE_STATE = /* GraphQL */ `
     product(id: $id) {
       id
       options {
+        id
         name
+        optionValues(first: ${LIVE_VARIANT_PAGE}) {
+          nodes {
+            id
+            name
+          }
+        }
       }
       variants(first: ${LIVE_VARIANT_PAGE}) {
         nodes {
@@ -546,7 +659,13 @@ const PRODUCT_OPTIONS_CREATE = /* GraphQL */ `
 type ProductLiveStateData = {
   product?: {
     id?: string;
-    options?: Array<{ name?: string | null } | null> | null;
+    options?: Array<{
+      id?: string | null;
+      name?: string | null;
+      optionValues?: {
+        nodes?: Array<{ id?: string | null; name?: string | null } | null> | null;
+      } | null;
+    } | null> | null;
     variants?: {
       nodes?: Array<{
         id?: string;
@@ -558,29 +677,75 @@ type ProductLiveStateData = {
   } | null;
 };
 
+type LiveOptionValue = { id?: string; name: string };
+
+type LiveOption = {
+  id?: string;
+  name: string;
+  values: LiveOptionValue[];
+};
+
 type LiveVariant = {
   jobNo: string;
+  optionValue: string;
   externalVariantId: string;
   externalInventoryItemId?: string;
 };
 
 type LiveProductState = {
+  options: LiveOption[];
   optionNames: string[];
   variants: LiveVariant[];
 };
 
-const JOB_OPTION = "Job";
-/** Option Shopify gives a product that has no options (single "Default Title" variant). */
-const DEFAULT_OPTION = "Title";
-
-function isJobOption(name: string): boolean {
-  return name.trim().toLowerCase() === JOB_OPTION.toLowerCase();
+function isLegacyJobOption(name: string): boolean {
+  return name.trim().toLowerCase() === LEGACY_JOB_OPTION.toLowerCase();
 }
+
+function isOwnedOption(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  return n === STOREFRONT_OPTION.toLowerCase() || n === LEGACY_JOB_OPTION.toLowerCase();
+}
+
+const PRODUCT_OPTION_UPDATE = /* GraphQL */ `
+  mutation productOptionUpdate(
+    $productId: ID!
+    $option: OptionUpdateInput!
+    $optionValuesToUpdate: [OptionValueUpdateInput!]
+  ) {
+    productOptionUpdate(
+      productId: $productId
+      option: $option
+      optionValuesToUpdate: $optionValuesToUpdate
+    ) {
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+const PRODUCT_OPTIONS_DELETE = /* GraphQL */ `
+  mutation productOptionsDelete(
+    $productId: ID!
+    $options: [ID!]!
+    $strategy: ProductOptionDeleteStrategy
+  ) {
+    productOptionsDelete(productId: $productId, options: $options, strategy: $strategy) {
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
 
 /**
  * What is on the Shopify product right now. Variant ids saved in Channels go
  * stale when the merchant edits variants or options in Shopify admin, so
- * updates reconcile against this instead.
+ * updates reconcile against this instead. SKU is the job number; the option
+ * value is the customer label.
  */
 export async function readShopifyLiveProduct(
   client: ShopifyAdminClient,
@@ -594,63 +759,217 @@ export async function readShopifyLiveProduct(
   if (!product?.id) {
     throw new ShopifyHttpError(404, "Shopify product not found");
   }
-  const optionNames = (product.options ?? [])
-    .map((o) => String(o?.name || "").trim())
-    .filter(Boolean);
+  const options: LiveOption[] = [];
+  for (const o of product.options ?? []) {
+    const name = String(o?.name || "").trim();
+    if (!name) continue;
+    const values: LiveOptionValue[] = [];
+    for (const v of o?.optionValues?.nodes ?? []) {
+      const valueName = String(v?.name || "").trim();
+      if (!valueName) continue;
+      values.push({ id: v?.id || undefined, name: valueName });
+    }
+    options.push({ id: o?.id || undefined, name, values });
+  }
+  const optionNames = options.map((o) => o.name);
   const variants: LiveVariant[] = [];
   for (const n of product.variants?.nodes ?? []) {
     if (!n?.id) continue;
-    const jobOpt = (n.selectedOptions || []).find((o) =>
-      isJobOption(String(o?.name || "")),
-    );
-    const jobNo = String(jobOpt?.value || n.sku || "").trim();
+    const selected = n.selectedOptions || [];
+    const owned = selected.find((o) => isOwnedOption(String(o?.name || "")));
+    const legacy = selected.find((o) => isLegacyJobOption(String(o?.name || "")));
+    const sku = String(n.sku || "").trim();
+    // Legacy products stored the job number in the Job option value and often also on SKU.
+    const jobNo = sku || String(legacy?.value || "").trim();
     variants.push({
       jobNo,
+      optionValue: String(owned?.value || "").trim(),
       externalVariantId: n.id,
       externalInventoryItemId: n.inventoryItem?.id || undefined,
     });
   }
-  return { optionNames, variants };
+  return { options, optionNames, variants };
+}
+
+function indexLiveByJob(
+  live: LiveProductState,
+  desired: Array<{ jobNo: string }>,
+): Map<string, LiveVariant> {
+  const map = new Map<string, LiveVariant>();
+  const used = new Set<string>();
+  for (const v of live.variants) {
+    const key = v.jobNo.trim().toUpperCase();
+    if (!key || map.has(key)) continue;
+    map.set(key, v);
+    used.add(v.externalVariantId);
+  }
+  const unmatchedLive = live.variants.filter(
+    (v) => !used.has(v.externalVariantId) && !v.jobNo.trim(),
+  );
+  const firstUnmatched = desired.find(
+    (d) => !map.has(d.jobNo.trim().toUpperCase()),
+  );
+  if (unmatchedLive.length === 1 && firstUnmatched) {
+    map.set(firstUnmatched.jobNo.trim().toUpperCase(), unmatchedLive[0]);
+  }
+  return map;
+}
+
+function optionValuesInSurvivorOrder(
+  live: LiveProductState,
+  variants: CreateProductInput["variants"],
+  plan: NonNullable<ReturnType<typeof storefrontOptionPlan>>,
+): string[] {
+  const labels = variants.map((v) => plan.byJob.get(v.jobNo.trim()) || v.jobNo.trim());
+  const survivor = live.variants.find((v) => v.jobNo.trim())?.jobNo.trim().toUpperCase();
+  if (!survivor) return labels;
+  const idx = variants.findIndex((v) => v.jobNo.trim().toUpperCase() === survivor);
+  if (idx <= 0) return labels;
+  const [hit] = labels.splice(idx, 1);
+  return [hit, ...labels];
 }
 
 /**
- * Put the Job option back when the merchant removed it (product collapsed to
- * one default variant). LEAVE_AS_IS links that variant to the first job, so
- * the remaining jobs can be bulk-created. Other merchant options are not
- * guessed at: the product needs fixing in Shopify (or deleting to re-import).
+ * Two or more pieces need one owned option (Metal, or Job when metal is unknown).
+ * A product the merchant collapsed to Title gets that option back. LEAVE_AS_IS
+ * links the surviving variant to the first value. Any other option is not guessed.
  */
-async function ensureJobOption(
+async function ensureStorefrontOption(
   client: ShopifyAdminClient,
   productId: string,
   live: LiveProductState,
-  jobNos: string[],
+  variants: CreateProductInput["variants"],
+  plan: NonNullable<ReturnType<typeof storefrontOptionPlan>>,
 ): Promise<LiveProductState> {
-  if (live.optionNames.some(isJobOption)) return live;
-  const onlyDefault = live.optionNames.every((name) => name === DEFAULT_OPTION);
-  if (!onlyDefault || live.variants.length > 1) {
-    throw new ShopifyHttpError(
-      409,
-      `Shopify product options were changed (${live.optionNames.join(", ")}). ` +
-        `DevJewels needs one "${JOB_OPTION}" option per piece; remove the other ` +
-        "options in Shopify or delete the product so it re-imports.",
-    );
+  const owned = live.options.find((o) => isOwnedOption(o.name));
+  if (!owned) {
+    const onlyDefault = live.optionNames.every((name) => name === DEFAULT_OPTION);
+    if (!onlyDefault || live.variants.length > 1) {
+      throw new ShopifyHttpError(
+        409,
+        `Shopify product options were changed (${live.optionNames.join(", ") || "none"}). ` +
+          `DevJewels needs one "${plan.optionName}" option per piece; remove the other ` +
+          "options in Shopify or delete the product so it re-imports.",
+      );
+    }
+    console.warn("shopify_product_option_restored", {
+      productId,
+      optionName: plan.optionName,
+      jobCount: variants.length,
+    });
+    const created = await client.graphql<{
+      productOptionsCreate?: {
+        userErrors?: Array<{ field?: string[]; message: string }>;
+      };
+    }>(PRODUCT_OPTIONS_CREATE, {
+      productId,
+      options: [
+        {
+          name: plan.optionName,
+          values: optionValuesInSurvivorOrder(live, variants, plan).map((name) => ({ name })),
+        },
+      ],
+      variantStrategy: "LEAVE_AS_IS",
+    });
+    throwGraphqlErrors(created.errors);
+    throwUserErrors(created.data?.productOptionsCreate?.userErrors, "productOptionsCreate");
+    live = await readShopifyLiveProduct(client, productId);
   }
-  console.warn("shopify_product_job_option_restored", {
-    productId,
-    jobCount: jobNos.length,
-  });
-  const created = await client.graphql<{
-    productOptionsCreate?: {
+  await relabelOwnedOption(client, productId, live, variants, plan);
+  return live;
+}
+
+/** Rename Job → Metal and rewrite option values to the customer label. */
+async function relabelOwnedOption(
+  client: ShopifyAdminClient,
+  productId: string,
+  live: LiveProductState,
+  variants: CreateProductInput["variants"],
+  plan: NonNullable<ReturnType<typeof storefrontOptionPlan>>,
+): Promise<void> {
+  const owned = live.options.find((o) => isOwnedOption(o.name));
+  if (!owned?.id) return;
+  const desiredJobs = new Set(variants.map((v) => v.jobNo.trim().toUpperCase()));
+  const targets = new Set(
+    variants.map((v) => (plan.byJob.get(v.jobNo.trim()) || "").toLowerCase()),
+  );
+  const updates: Array<{ id: string; name: string }> = [];
+  const usedValueIds = new Set<string>();
+  for (const variant of live.variants) {
+    const valueId = owned.values.find(
+      (v) => v.name === variant.optionValue && v.id && !usedValueIds.has(v.id),
+    )?.id;
+    if (!valueId) continue;
+    const jobKey = variant.jobNo.trim().toUpperCase();
+    const desired = variants.find((v) => v.jobNo.trim().toUpperCase() === jobKey);
+    let next = "";
+    if (desired) {
+      next = plan.byJob.get(desired.jobNo.trim()) || "";
+    } else if (
+      variant.optionValue &&
+      targets.has(variant.optionValue.toLowerCase()) &&
+      !desiredJobs.has(jobKey)
+    ) {
+      // A piece we are about to remove still holds the label a kept piece needs.
+      next = variant.jobNo.trim() || valueId;
+    }
+    if (!next || next === variant.optionValue) continue;
+    usedValueIds.add(valueId);
+    updates.push({ id: valueId, name: clipOptionValue(next) });
+  }
+  const rename = owned.name !== plan.optionName;
+  if (!rename && updates.length === 0) return;
+  const updated = await client.graphql<{
+    productOptionUpdate?: {
       userErrors?: Array<{ field?: string[]; message: string }>;
     };
-  }>(PRODUCT_OPTIONS_CREATE, {
+  }>(PRODUCT_OPTION_UPDATE, {
     productId,
-    options: [{ name: JOB_OPTION, values: jobNos.map((name) => ({ name })) }],
-    variantStrategy: "LEAVE_AS_IS",
+    option: { id: owned.id, name: plan.optionName },
+    ...(updates.length ? { optionValuesToUpdate: updates } : {}),
   });
-  throwGraphqlErrors(created.errors);
-  throwUserErrors(created.data?.productOptionsCreate?.userErrors, "productOptionsCreate");
-  return readShopifyLiveProduct(client, productId);
+  throwGraphqlErrors(updated.errors);
+  throwUserErrors(updated.data?.productOptionUpdate?.userErrors, "productOptionUpdate");
+}
+
+function rejectForeignOptions(live: LiveProductState, wantedOption: string): void {
+  const owned = live.options.some((o) => isOwnedOption(o.name));
+  const onlyDefault = live.optionNames.every((name) => name === DEFAULT_OPTION);
+  if (owned || onlyDefault || live.optionNames.length === 0) return;
+  throw new ShopifyHttpError(
+    409,
+    `Shopify product options were changed (${live.optionNames.join(", ")}). ` +
+      `DevJewels needs one "${wantedOption}" option per piece; remove the other ` +
+      "options in Shopify or delete the product so it re-imports.",
+  );
+}
+
+/**
+ * One piece uses Shopify's default Title variant, which themes do not render
+ * as a picker. POSITION drops a Job/Metal option that still has leftover values
+ * after the extra pieces are gone. One remaining variant is not a duplicate, so
+ * it stays.
+ */
+async function hideSinglePieceOption(
+  client: ShopifyAdminClient,
+  productId: string,
+  live: LiveProductState,
+): Promise<void> {
+  const ids = live.options
+    .filter((o) => isOwnedOption(o.name) && o.id)
+    .map((o) => o.id as string);
+  if (!ids.length) return;
+  const deleted = await client.graphql<{
+    productOptionsDelete?: {
+      userErrors?: Array<{ field?: string[]; message: string }>;
+    };
+  }>(PRODUCT_OPTIONS_DELETE, {
+    productId,
+    options: ids,
+    strategy: "POSITION",
+  });
+  throwGraphqlErrors(deleted.errors);
+  throwUserErrors(deleted.data?.productOptionsDelete?.userErrors, "productOptionsDelete");
 }
 
 export async function createShopifyProduct(
@@ -681,10 +1000,10 @@ export async function createShopifyProduct(
     });
   }
 
-  // Shopify 2024-10+: create product shell, then variants via bulk APIs.
-  // SKU lives on inventoryItem. Always create a "Job" option, including
-  // single-variant / OOS placeholders, so a later live job can bulk-create
-  // without productVariantsBulkCreate failing on a missing option.
+  // Shopify 2024-10+: create the product shell, then write the variant.
+  // One piece keeps Shopify's default Title variant so the theme hides the picker.
+  // Two or more pieces get one Metal option (14K White Gold, …). Job number stays on SKU.
+  const plan = storefrontOptionPlan(input.variants);
   const descriptionHtml = jobDetailsDescriptionHtml(input.designNo, input.variants);
   const result = await client.graphql<ProductCreateData>(PRODUCT_CREATE, {
     product: {
@@ -694,12 +1013,18 @@ export async function createShopifyProduct(
       metafields: designMetafields(input.designNo),
       ...(descriptionHtml ? { descriptionHtml } : {}),
       ...shopifyTaxonomyFields(input),
-      productOptions: [
-        {
-          name: "Job",
-          values: input.variants.map((v) => ({ name: v.jobNo })),
-        },
-      ],
+      ...(plan
+        ? {
+            productOptions: [
+              {
+                name: plan.optionName,
+                values: input.variants.map((v) => ({
+                  name: plan.byJob.get(v.jobNo.trim()) || v.jobNo.trim(),
+                })),
+              },
+            ],
+          }
+        : {}),
     },
   });
 
@@ -717,13 +1042,46 @@ export async function createShopifyProduct(
     await input.onExternalProductId(product.id);
   }
 
+  if (!plan) {
+    const shellId = product.variants?.edges?.[0]?.node?.id;
+    if (!shellId) {
+      throw new ShopifyHttpError(502, "productCreate returned no variant");
+    }
+    const only = input.variants[0];
+    const updated = await client.graphql<BulkVariantData>(PRODUCT_VARIANTS_BULK_UPDATE, {
+      productId: product.id,
+      variants: [
+        {
+          id: shellId,
+          ...bulkVariantInput(input.designNo, only),
+        },
+      ],
+    });
+    throwGraphqlErrors(updated.errors);
+    throwUserErrors(
+      updated.data?.productVariantsBulkUpdate?.userErrors,
+      "productVariantsBulkUpdate",
+    );
+    const nodes = updated.data?.productVariantsBulkUpdate?.productVariants ?? [];
+    await attachShopifyProductImages(client, product.id, input.imageUrls, {
+      replace: true,
+    });
+    return {
+      externalProductId: product.id,
+      variants: matchVariants(input.variants, nodes.length ? nodes : [{ id: shellId }]),
+    };
+  }
+
   const created = await client.graphql<BulkVariantData>(
     PRODUCT_VARIANTS_BULK_CREATE,
     {
       productId: product.id,
       strategy: "REMOVE_STANDALONE_VARIANT",
       variants: input.variants.map((v) =>
-        bulkVariantInput(input.designNo, v, true),
+        bulkVariantInput(input.designNo, v, {
+          name: plan.optionName,
+          value: plan.byJob.get(v.jobNo.trim()) || v.jobNo.trim(),
+        }),
       ),
     },
   );
@@ -761,17 +1119,13 @@ export async function updateShopifyProduct(
   }
 
   const productId = input.externalProductId.trim();
-  const live = await ensureJobOption(
-    client,
-    productId,
-    await readShopifyLiveProduct(client, productId),
-    input.variants.map((v) => v.jobNo),
-  );
-  const existingByJob = new Map<string, LiveVariant>();
-  for (const v of live.variants) {
-    const key = v.jobNo.trim().toUpperCase();
-    if (key && !existingByJob.has(key)) existingByJob.set(key, v);
+  const plan = storefrontOptionPlan(input.variants);
+  let live = await readShopifyLiveProduct(client, productId);
+  rejectForeignOptions(live, plan?.optionName ?? STOREFRONT_OPTION);
+  if (plan) {
+    live = await ensureStorefrontOption(client, productId, live, input.variants, plan);
   }
+  const existingByJob = indexLiveByJob(live, input.variants);
 
   const descriptionHtml = jobDetailsDescriptionHtml(input.designNo, input.variants);
   const updateResult = await client.graphql<ProductUpdateData>(PRODUCT_UPDATE, {
@@ -803,9 +1157,16 @@ export async function updateShopifyProduct(
         const existing = existingByJob.get(v.jobNo.trim().toUpperCase())!;
         return {
           id: existing.externalVariantId,
-          price: String(v.price),
-          inventoryItem: { sku: v.sku || v.jobNo },
-          metafields: variantMetafields(input.designNo, v.jobNo, v.details),
+          ...bulkVariantInput(
+            input.designNo,
+            v,
+            plan
+              ? {
+                  name: plan.optionName,
+                  value: plan.byJob.get(v.jobNo.trim()) || v.jobNo.trim(),
+                }
+              : undefined,
+          ),
         };
       }),
     });
@@ -838,7 +1199,18 @@ export async function updateShopifyProduct(
       productId,
       // Orphan reclaim (no mapped variants yet) must drop Shopify's default variant.
       ...(toUpdate.length === 0 ? { strategy: "REMOVE_STANDALONE_VARIANT" } : {}),
-      variants: toCreate.map((v) => bulkVariantInput(input.designNo, v, true)),
+      variants: toCreate.map((v) =>
+        bulkVariantInput(
+          input.designNo,
+          v,
+          plan
+            ? {
+                name: plan.optionName,
+                value: plan.byJob.get(v.jobNo.trim()) || v.jobNo.trim(),
+              }
+            : undefined,
+        ),
+      ),
     });
     throwGraphqlErrors(bulk.errors);
     throwUserErrors(
@@ -875,6 +1247,10 @@ export async function updateShopifyProduct(
         throwUserErrors(fatal, "productVariantsBulkDelete");
       }
     }
+  }
+
+  if (!plan) {
+    await hideSinglePieceOption(client, productId, live);
   }
 
   await attachShopifyProductImages(client, productId, input.imageUrls, {

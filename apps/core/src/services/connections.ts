@@ -19,6 +19,8 @@ export type ConnectionRow = {
   sync_inventory: boolean;
   sync_price: boolean;
   sync_products: boolean;
+  /** When false, mapped products only get inventory qty + unit cost on sync. */
+  sync_product_content: boolean;
   sync_orders: boolean;
 };
 
@@ -33,6 +35,8 @@ export type CreateConnectionInput = {
   syncInventory?: boolean;
   syncPrice?: boolean;
   syncProducts?: boolean;
+  /** Opt in to overwrite Shopify titles/descriptions/prices/variants/tags/images. */
+  syncProductContent?: boolean;
   syncOrders?: boolean;
   isActive?: boolean;
 };
@@ -56,6 +60,7 @@ export type ConnectionStore = {
       syncInventory: boolean;
       syncPrice: boolean;
       syncProducts: boolean;
+      syncProductContent: boolean;
       syncOrders: boolean;
       isActive: boolean;
       name: string;
@@ -71,6 +76,7 @@ export type ConnectionStore = {
       syncPrice: boolean;
       syncProducts: boolean;
       syncOrders: boolean;
+      syncProductContent?: boolean;
     },
   ): Promise<ConnectionRow | null>;
 };
@@ -88,6 +94,7 @@ type DbConnectionRow = {
   sync_inventory: boolean;
   sync_price: boolean;
   sync_products: boolean;
+  sync_product_content: boolean;
   sync_orders: boolean;
 };
 
@@ -122,13 +129,16 @@ function mapRow(row: DbConnectionRow): ConnectionRow | null {
     sync_inventory: row.sync_inventory,
     sync_price: row.sync_price,
     sync_products: row.sync_products ?? true,
+    sync_product_content: row.sync_product_content ?? false,
     sync_orders: row.sync_orders,
   };
 }
 
 const SELECT_COLS = `id::text AS id, platform, name, is_active, credentials_secret_ref,
                 customer_id, markup_mode, markup_value, markup_bps,
-                sync_inventory, sync_price, sync_products, sync_orders`;
+                sync_inventory, sync_price, sync_products,
+                COALESCE(sync_product_content, FALSE) AS sync_product_content,
+                sync_orders`;
 
 function pgStore(db: SqlClient): ConnectionStore {
   return {
@@ -210,8 +220,9 @@ function pgStore(db: SqlClient): ConnectionStore {
         `INSERT INTO ${CHANNELS_SCHEMA}.connection
            (platform, name, credentials_secret_ref, customer_id,
             markup_mode, markup_value, markup_bps,
-            sync_inventory, sync_price, sync_products, sync_orders, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            sync_inventory, sync_price, sync_products, sync_product_content,
+            sync_orders, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING ${SELECT_COLS}`,
         [
           input.platform,
@@ -224,6 +235,7 @@ function pgStore(db: SqlClient): ConnectionStore {
           input.syncInventory ?? true,
           input.syncPrice ?? true,
           input.syncProducts ?? true,
+          input.syncProductContent ?? false,
           input.syncOrders ?? true,
           input.isActive ?? true,
         ],
@@ -266,12 +278,13 @@ function pgStore(db: SqlClient): ConnectionStore {
              sync_inventory = COALESCE($3, sync_inventory),
              sync_price = COALESCE($4, sync_price),
              sync_products = COALESCE($5, sync_products),
-             sync_orders = COALESCE($6, sync_orders),
-             is_active = COALESCE($7, is_active),
-             name = COALESCE($8, name),
-             customer_id = COALESCE($9, customer_id),
-             markup_mode = COALESCE($10, markup_mode),
-             markup_value = COALESCE($11, markup_value),
+             sync_product_content = COALESCE($6, sync_product_content),
+             sync_orders = COALESCE($7, sync_orders),
+             is_active = COALESCE($8, is_active),
+             name = COALESCE($9, name),
+             customer_id = COALESCE($10, customer_id),
+             markup_mode = COALESCE($11, markup_mode),
+             markup_value = COALESCE($12, markup_value),
              updated_at = now()
          WHERE id = $1::uuid
          RETURNING ${SELECT_COLS}`,
@@ -281,6 +294,7 @@ function pgStore(db: SqlClient): ConnectionStore {
           flags?.syncInventory ?? null,
           flags?.syncPrice ?? null,
           flags?.syncProducts ?? null,
+          flags?.syncProductContent ?? null,
           flags?.syncOrders ?? null,
           flags?.isActive ?? null,
           flags?.name ?? null,
@@ -300,6 +314,7 @@ function pgStore(db: SqlClient): ConnectionStore {
              sync_price = $3,
              sync_products = $4,
              sync_orders = $5,
+             sync_product_content = COALESCE($6, sync_product_content),
              updated_at = now()
          WHERE id = $1::uuid
          RETURNING ${SELECT_COLS}`,
@@ -309,6 +324,7 @@ function pgStore(db: SqlClient): ConnectionStore {
           flags.syncPrice,
           flags.syncProducts,
           flags.syncOrders,
+          flags.syncProductContent ?? null,
         ],
       );
       const row = result.rows[0];
@@ -363,6 +379,7 @@ export function createMemoryConnectionStore(
         sync_inventory: input.syncInventory ?? true,
         sync_price: input.syncPrice ?? true,
         sync_products: input.syncProducts ?? true,
+        sync_product_content: input.syncProductContent ?? false,
         sync_orders: input.syncOrders ?? true,
       };
       rows.set(id, row);
@@ -395,6 +412,8 @@ export function createMemoryConnectionStore(
         sync_inventory: flags?.syncInventory ?? existing.sync_inventory,
         sync_price: flags?.syncPrice ?? existing.sync_price,
         sync_products: flags?.syncProducts ?? existing.sync_products,
+        sync_product_content:
+          flags?.syncProductContent ?? existing.sync_product_content,
         sync_orders: flags?.syncOrders ?? existing.sync_orders,
         is_active: flags?.isActive ?? existing.is_active,
         name: flags?.name ?? existing.name,
@@ -414,6 +433,8 @@ export function createMemoryConnectionStore(
         sync_price: flags.syncPrice,
         sync_products: flags.syncProducts,
         sync_orders: flags.syncOrders,
+        sync_product_content:
+          flags.syncProductContent ?? existing.sync_product_content,
       };
       rows.set(id, next);
       return next;

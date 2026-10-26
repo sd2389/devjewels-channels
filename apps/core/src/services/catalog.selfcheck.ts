@@ -60,6 +60,7 @@ function baseConnection(): ConnectionRow {
     sync_inventory: true,
     sync_price: true,
     sync_products: true,
+    sync_product_content: false,
     sync_orders: true,
   };
 }

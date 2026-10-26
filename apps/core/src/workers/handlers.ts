@@ -22,6 +22,8 @@ export type InventorySyncJob = QueueJobEnvelope & {
   designNo: string;
   jobNo: string;
   quantity: number;
+  /** Wholesale unit cost (Shopify inventory item cost). Not the selling price. */
+  unitCost?: number;
 };
 
 export type OrderProcessingJob = QueueJobEnvelope & {

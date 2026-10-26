@@ -1,6 +1,8 @@
 /**
- * Per-design product sync: create/update when entitled; delete when revoked.
- * Pulls title/price/jobs from Django channels_api facades (customer-scoped).
+ * Per-design product sync: create when entitled; delete when revoked.
+ * Mapped products default to inventory qty + wholesale cost only — merchant
+ * owns titles, descriptions, selling prices, variants, tags, images, status
+ * unless connection.sync_product_content is opted in.
  */
 import { registerDefaultAdapters } from "@/channels/registerAdapters";
 import { AdapterRouter } from "@/channels/router";
@@ -299,11 +301,13 @@ export async function runProductSyncJob(
   const variants = [];
   for (const j of jobs) {
     const jobNo = String(j.job_no).trim();
+    // Wholesale / unit cost — never apply Channels markup (that is selling price).
+    const wholesaleCost = parsePrice(j.totamt ?? defaultPrice);
     const unitPrice = await resolveChannelVariantPrice({
       customerId: connection.customer_id,
       designNo,
       jobNo,
-      fallbackPrice: parsePrice(j.totamt ?? defaultPrice),
+      fallbackPrice: wholesaleCost,
       canViewPrices,
       markupMode: connection.markup_mode,
       markupValue: connection.markup_value,
@@ -314,6 +318,7 @@ export async function runProductSyncJob(
       jobNo,
       sku: jobNo,
       price: unitPrice,
+      wholesaleCost,
       quantity: canViewInventory && !resolved.outOfStock ? 1 : 0,
       details: detailsFromInventoryJob(
         j as Record<string, unknown>,
@@ -362,6 +367,46 @@ export async function runProductSyncJob(
         job.connectionId,
         designNo,
       );
+
+      // Merchant-owned catalog (default): never rewrite Shopify product content.
+      // Only refresh qty + wholesale cost on variants we already mapped.
+      if (!connection.sync_product_content) {
+        resultVariants = [];
+        for (const mapped of allMapped) {
+          const live = variants.find(
+            (v) =>
+              v.jobNo.trim().toUpperCase() === mapped.job_no.trim().toUpperCase(),
+          );
+          resultVariants.push({
+            jobNo: mapped.job_no,
+            externalVariantId: mapped.external_variant_id,
+            externalInventoryItemId:
+              mapped.external_inventory_item_id ?? undefined,
+          });
+          if (canViewInventory && connection.sync_inventory) {
+            await enqueueInventorySync({
+              kind: "inventory.sync",
+              connectionId: job.connectionId,
+              platform: job.platform,
+              designNo,
+              jobNo: mapped.job_no,
+              quantity: live?.quantity ?? 0,
+              ...(live != null ? { unitCost: live.wholesaleCost } : {}),
+            });
+          }
+        }
+        outcome = "UPDATED";
+        await writeSyncLog({
+          connectionId: job.connectionId,
+          platform: job.platform,
+          jobType: "product",
+          status: "SUCCESS",
+          designNo,
+          message: `inventory_only mapped=${resultVariants.length} (content sync off)`,
+        });
+        return outcome;
+      }
+
       const existingVariants = [];
       for (const v of variants) {
         const mapped = allMapped.find(
