@@ -1112,6 +1112,14 @@ export function planLiveStockVariantSync(input: {
   desiredJobNos: string[];
   /** Job numbers Channels has mapped for this design. */
   ownedJobNos: string[];
+  /**
+   * Shopify variant id → the job number Channels mapped to it. SKU is editable
+   * in Shopify admin, so a merchant renaming one would otherwise hide a piece
+   * we own: it would match nothing, the job would be created a second time,
+   * the mapping would move to the new variant, and the original would stay on
+   * sale after the piece sold. The variant id is the stable identity.
+   */
+  ownedByVariantId?: Map<string, string>;
 }): LiveStockVariantPlan {
   // Callers match the returned jobNo against the live feed with ===, so a SKU
   // that differs only in casing ("j1" for "J1") has to come back in the feed's
@@ -1129,15 +1137,21 @@ export function planLiveStockVariantSync(input: {
   const seen = new Set<string>();
 
   for (const variant of input.live) {
-    const key = jobKey(variant.jobNo);
+    const skuKey = jobKey(variant.jobNo);
+    // The SKU wins while it still names a piece we know; otherwise fall back to
+    // the job this variant id was mapped to, which the merchant cannot edit.
+    const key =
+      skuKey && (desired.has(skuKey) || owned.has(skuKey))
+        ? skuKey
+        : jobKey(input.ownedByVariantId?.get(variant.externalVariantId) ?? "");
     if (key && desired.has(key) && !seen.has(key)) {
       seen.add(key);
       keep.push({ jobNo: desiredByKey.get(key) ?? variant.jobNo.trim(), variant });
       continue;
     }
     // Only a piece that has genuinely left live stock is removed. A merchant
-    // variant (no job SKU, or a SKU we never mapped) and a second copy of a
-    // piece still in stock both stay put.
+    // variant (no job SKU, nothing we ever mapped) and a second copy of a piece
+    // still in stock both stay put.
     if (key && owned.has(key) && !desired.has(key)) removable.push(variant);
   }
 
@@ -1317,6 +1331,11 @@ export async function syncShopifyLiveStockVariants(
     live: live.variants,
     desiredJobNos,
     ownedJobNos,
+    ownedByVariantId: new Map(
+      [...(input.existingVariants ?? []), ...(input.removeVariants ?? [])]
+        .filter((v) => v.externalVariantId)
+        .map((v) => [v.externalVariantId, v.jobNo] as const),
+    ),
   });
 
   const resultVariants: UpdateProductResult["variants"] = [];

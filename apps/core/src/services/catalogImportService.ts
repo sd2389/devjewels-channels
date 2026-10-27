@@ -339,7 +339,10 @@ async function importOneDesign(input: {
           jobNo: variant.jobNo,
           // No live job behind the variant means the piece is sold — zero it.
           quantity: live?.quantity ?? 0,
-          ...(live != null ? { unitCost: live.wholesaleCost } : {}),
+          // Wholesale cost is price data — see runProductSyncJob.
+          ...(live != null && input.canViewPrices
+            ? { unitCost: live.wholesaleCost }
+            : {}),
         });
       }
     }

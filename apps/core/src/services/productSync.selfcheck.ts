@@ -103,6 +103,7 @@ type EntState = {
   keyPresent: boolean;
   canViewDesigns: boolean;
   canViewInventory: boolean;
+  canViewPrices: boolean;
   canPlaceOrders: boolean;
 };
 
@@ -156,7 +157,7 @@ function mockStoreApi(state: EntState): StoreApiClient {
         permissions: {
           can_view_designs: state.canViewDesigns,
           can_view_inventory: state.canViewInventory,
-          can_view_prices: true,
+          can_view_prices: state.canViewPrices,
           can_place_orders: state.canPlaceOrders,
         },
         design_nos: state.designNos,
@@ -376,6 +377,7 @@ async function main(): Promise<void> {
     keyPresent: true,
     canViewDesigns: true,
     canViewInventory: true,
+    canViewPrices: true,
     canPlaceOrders: false,
   };
 
@@ -503,6 +505,38 @@ async function main(): Promise<void> {
     setConnectionStoreForTests(
       createMemoryConnectionStore([connectionA(), connectionB()]),
     );
+
+    // --- wholesale cost is price data: no price permission, no cost write ---
+    entState.canViewPrices = true;
+    drainMemoryInventoryQueue();
+    clearEntitlementCache();
+    await runProductSyncJob({
+      kind: "product.sync",
+      connectionId: CONN_A,
+      platform: "SHOPIFY",
+      designNo: "PS-1",
+    });
+    const pricedJobs = drainMemoryInventoryQueue();
+    if (!pricedJobs.some((j) => j.unitCost != null)) {
+      throw new Error("a price-entitled customer should get wholesale cost");
+    }
+    entState.canViewPrices = false;
+    clearEntitlementCache();
+    await runProductSyncJob({
+      kind: "product.sync",
+      connectionId: CONN_A,
+      platform: "SHOPIFY",
+      designNo: "PS-1",
+    });
+    const unpricedJobs = drainMemoryInventoryQueue();
+    if (!unpricedJobs.length || unpricedJobs.some((j) => j.unitCost != null)) {
+      throw new Error(
+        `can_view_prices=false must not export wholesale cost: ${JSON.stringify(unpricedJobs)}`,
+      );
+    }
+    entState.canViewPrices = true;
+    clearEntitlementCache();
+    drainMemoryInventoryQueue();
 
     // --- revoke, merchant-owned catalog → stock zeroed, product kept ---
     drainMemoryInventoryQueue();

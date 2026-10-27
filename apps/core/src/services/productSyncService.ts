@@ -524,7 +524,14 @@ export async function runProductSyncJob(
           jobNo: variant.jobNo,
           // No live job behind the variant means the piece is sold — zero it.
           quantity: live?.quantity ?? 0,
-          ...(live != null ? { unitCost: live.wholesaleCost } : {}),
+          // Wholesale cost is price data. A customer entitled to inventory but
+          // not to prices must not get it written into their Shopify admin;
+          // resolveChannelVariantPrice already zeroes the selling price for
+          // that combination, and totamt comes off an endpoint that is not
+          // customer-scoped, so the gate has to be here.
+          ...(live != null && canViewPrices
+            ? { unitCost: live.wholesaleCost }
+            : {}),
         });
       }
     }

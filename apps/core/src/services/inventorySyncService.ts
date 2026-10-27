@@ -145,7 +145,13 @@ export async function runInventorySyncJob(
       designNo: job.designNo,
       jobNo: job.jobNo,
       quantity: revoking ? 0 : job.quantity,
-      ...(!revoking && job.unitCost != null && Number.isFinite(job.unitCost)
+      // Re-checked here, not just at enqueue: a job can sit in the queue
+      // across a permission change, and cost must never reach a shop whose
+      // customer cannot see prices.
+      ...(!revoking &&
+      entitlements?.permissions.can_view_prices &&
+      job.unitCost != null &&
+      Number.isFinite(job.unitCost)
         ? { unitCost: job.unitCost }
         : {}),
       externalInventoryItemId: mapping.external_inventory_item_id,

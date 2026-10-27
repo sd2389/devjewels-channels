@@ -515,6 +515,87 @@ async function main(): Promise<void> {
     JSON.stringify(twinValues),
   );
 
+  console.log("the merchant renames a mapped SKU");
+
+  // SKU is editable in Shopify admin. Matching on it alone would hide the
+  // piece, create the job a second time, move the mapping to the new variant
+  // and leave the original on sale after the piece sold.
+  const renamed = fakeClient({
+    options: [{ name: "Metal", values: ["14K White Gold"] }],
+    variants: [
+      {
+        id: "gid://shopify/ProductVariant/700",
+        sku: "MERCHANT-RENAMED",
+        price: "1400.00",
+        options: [{ name: "Metal", value: "14K White Gold" }],
+      },
+    ],
+  });
+  const renamedResult = await updateShopifyProduct(
+    renamed.client,
+    updateInput({
+      variants: [job("DE-093_B2.00")],
+      existingVariants: [
+        { jobNo: "DE-093_B2.00", externalVariantId: "gid://shopify/ProductVariant/700" },
+      ],
+    }) as never,
+  );
+  check(
+    "the piece is recognised by variant id, not re-created",
+    !renamed.calls.some((c) => c.op === "productVariantsBulkCreate"),
+    renamed.calls.map((c) => c.op).join(", "),
+  );
+  check(
+    "its mapping still points at the merchant's variant",
+    renamedResult.variants.length === 1 &&
+      renamedResult.variants[0]?.externalVariantId ===
+        "gid://shopify/ProductVariant/700" &&
+      renamedResult.variants[0]?.jobNo === "DE-093_B2.00",
+    JSON.stringify(renamedResult.variants),
+  );
+
+  // And once that piece sells, the renamed variant is the one removed.
+  const renamedSold = fakeClient({
+    options: [
+      { name: "Metal", values: ["14K White Gold", "18K Rose Gold"] },
+    ],
+    variants: [
+      {
+        id: "gid://shopify/ProductVariant/700",
+        sku: "MERCHANT-RENAMED",
+        price: "1400.00",
+        options: [{ name: "Metal", value: "14K White Gold" }],
+      },
+      {
+        id: "gid://shopify/ProductVariant/701",
+        sku: "DE-093_B3.00",
+        price: "1400.00",
+        options: [{ name: "Metal", value: "18K Rose Gold" }],
+      },
+    ],
+  });
+  await updateShopifyProduct(
+    renamedSold.client,
+    updateInput({
+      variants: [job("DE-093_B3.00")],
+      existingVariants: [
+        { jobNo: "DE-093_B3.00", externalVariantId: "gid://shopify/ProductVariant/701" },
+      ],
+      removeVariants: [
+        { jobNo: "DE-093_B2.00", externalVariantId: "gid://shopify/ProductVariant/700" },
+      ],
+    }) as never,
+  );
+  const renamedDelete = renamedSold.calls.find(
+    (c) => c.op === "productVariantsBulkDelete",
+  );
+  check(
+    "a sold piece is removed even after its SKU was renamed",
+    JSON.stringify(renamedDelete?.variables.variantsIds) ===
+      JSON.stringify(["gid://shopify/ProductVariant/700"]),
+    JSON.stringify(renamedDelete?.variables),
+  );
+
   console.log("a SKU that differs only in casing");
 
   // Callers match the returned jobNo against the live feed with ===, so the
