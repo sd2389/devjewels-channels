@@ -62,6 +62,51 @@ SQL stubs:
 - `apps/shopify/src/db/001_shopify_tables.sql`
 - `apps/woocommerce/src/db/001_woocommerce_tables.sql`
 
+## What the sync owns (hard rule)
+
+A connected store is the merchant's. DevJewels owns live stock; everything a
+shopper reads is theirs. `connection.sync_product_content` decides which, and it
+is **FALSE for every shop by default**.
+
+| | `sync_product_content = false` (default) | `= true` (opt in) |
+|---|---|---|
+| Product title, description, tags, product type | never written | written from the design |
+| Selling price of a variant already on the product | never written | written (cost + markup) |
+| Images / media | never written | replaced from the design |
+| Product status (active / draft) | never written | never written |
+| Product options the merchant made | left alone | one `Metal` option enforced |
+| **Which pieces exist (variants)** | **reconciled from live stock** | reconciled from live stock |
+| **Quantity per piece** | **written** | written |
+| **Wholesale unit cost** (`inventoryItem.cost`) | **written** | written |
+
+A design holds many pieces (`job_no`). A piece that sells leaves the feed, and
+its Shopify variant is deleted on the next sync — a storefront must never outlive
+the stock. A new piece is added as a variant and inherits the merchant's own
+price for that design, so it never lands at 0.00. Only pieces Channels mapped are
+ever removed: a variant the merchant added themselves is never touched, and
+Shopify needs one variant, so the last survivor is zeroed instead of deleted.
+
+Where the rule lives:
+
+- `apps/shopify/src/products.ts` — `updateShopifyProduct` routes to
+  `syncShopifyLiveStockVariants` unless `syncProductContent === true`. The guard
+  is at the adapter, not the call site, so a new caller cannot reopen the hole.
+  `createShopifyProduct` reclaim (an unmapped design that already exists in
+  Shopify) inherits the same flag.
+- `apps/core/src/services/productSyncService.ts` — revoke zeroes every mapped
+  piece instead of deleting the product, and keeps mappings so re-entitlement
+  restores stock. Only `sync_product_content = true` deletes.
+- `apps/shopify/src/merchantOwnedCatalog.selfcheck.ts` — asserts that no
+  merchant-owned mutation (`productUpdate`, `productCreateMedia`,
+  `productOption*`, `productDelete`) is ever sent with content sync off. Runs in
+  CI via `npm run selfcheck`.
+
+To hand a shop's catalog copy back to DevJewels:
+
+```sql
+UPDATE channels.connection SET sync_product_content = TRUE WHERE id = '<uuid>';
+```
+
 ## Queues (SST)
 
 Owned by core, shared across platforms:

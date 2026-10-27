@@ -624,6 +624,7 @@ const PRODUCT_LIVE_STATE = /* GraphQL */ `
         nodes {
           id
           sku
+          price
           selectedOptions {
             name
             value
@@ -670,6 +671,7 @@ type ProductLiveStateData = {
       nodes?: Array<{
         id?: string;
         sku?: string | null;
+        price?: string | null;
         selectedOptions?: Array<{ name?: string | null; value?: string | null }> | null;
         inventoryItem?: { id?: string } | null;
       } | null> | null;
@@ -690,6 +692,10 @@ type LiveVariant = {
   optionValue: string;
   externalVariantId: string;
   externalInventoryItemId?: string;
+  /** Merchant's current selling price. New pieces inherit it; sync never rewrites it. */
+  price?: string;
+  /** Every option value Shopify holds for this variant, by option name. */
+  selectedOptions: Array<{ name: string; value: string }>;
 };
 
 type LiveProductState = {
@@ -786,6 +792,13 @@ export async function readShopifyLiveProduct(
       optionValue: String(owned?.value || "").trim(),
       externalVariantId: n.id,
       externalInventoryItemId: n.inventoryItem?.id || undefined,
+      price: n.price == null ? undefined : String(n.price),
+      selectedOptions: selected
+        .map((o) => ({
+          name: String(o?.name || "").trim(),
+          value: String(o?.value || "").trim(),
+        }))
+        .filter((o) => o.name),
     });
   }
   return { options, optionNames, variants };
@@ -986,10 +999,15 @@ export async function createShopifyProduct(
     titleHint: input.title,
   });
   if (existingId) {
+    // An unmapped design that already exists in Shopify is almost always the
+    // merchant's own product (a lost mapping, a reconnect, a second connection).
+    // syncProductContent rides along on ...input, so reclaim goes down the same
+    // live-stock-only path as any other update unless content sync is opted in.
     console.info("shopify_product_create_reclaim", {
       connectionId: input.connectionId,
       designNo: input.designNo,
       externalProductId: existingId,
+      syncProductContent: input.syncProductContent === true,
     });
     if (input.onExternalProductId) {
       await input.onExternalProductId(existingId);
@@ -1101,6 +1119,324 @@ export async function createShopifyProduct(
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * Live-stock variant sync (merchant-owned catalog, the default path)
+ * ------------------------------------------------------------------ */
+
+function jobKey(raw: string): string {
+  return String(raw || "").trim().toUpperCase();
+}
+
+export type LiveStockVariantPlan = {
+  /** Job still in live stock and already on Shopify — qty + cost only. */
+  keep: Array<{ jobNo: string; variant: LiveVariant }>;
+  /** Job in live stock with no Shopify variant yet — a new piece to add. */
+  create: string[];
+  /** Our piece, sold out of live stock — the variant is removed from Shopify. */
+  remove: LiveVariant[];
+  /** Would be removed, but Shopify needs one variant — zeroed instead. */
+  zero: LiveVariant[];
+};
+
+/**
+ * Decide what happens to each Shopify variant from live stock alone.
+ *
+ * A design holds many pieces; a sold piece has to disappear from the storefront.
+ * Only pieces Channels created (`ownedJobNos`, from `variant_mapping`) are ever
+ * removed — a variant the merchant added themselves is left alone, and so is a
+ * variant with no job number on its SKU. Shopify rejects a product with zero
+ * variants, so the last survivor is zeroed rather than deleted.
+ */
+export function planLiveStockVariantSync(input: {
+  live: LiveVariant[];
+  /** Job numbers in live stock right now. */
+  desiredJobNos: string[];
+  /** Job numbers Channels has mapped for this design. */
+  ownedJobNos: string[];
+}): LiveStockVariantPlan {
+  const desired = new Set(input.desiredJobNos.map(jobKey).filter(Boolean));
+  const owned = new Set(input.ownedJobNos.map(jobKey).filter(Boolean));
+
+  const keep: LiveStockVariantPlan["keep"] = [];
+  const removable: LiveVariant[] = [];
+  const seen = new Set<string>();
+
+  for (const variant of input.live) {
+    const key = jobKey(variant.jobNo);
+    if (key && desired.has(key) && !seen.has(key)) {
+      seen.add(key);
+      keep.push({ jobNo: variant.jobNo.trim(), variant });
+      continue;
+    }
+    // Only a piece that has genuinely left live stock is removed. A merchant
+    // variant (no job SKU, or a SKU we never mapped) and a second copy of a
+    // piece still in stock both stay put.
+    if (key && owned.has(key) && !desired.has(key)) removable.push(variant);
+  }
+
+  const create = input.desiredJobNos
+    .map((j) => j.trim())
+    .filter((j) => j && !seen.has(jobKey(j)));
+
+  // Shopify rejects a product with no variants. New pieces are added before old
+  // ones are removed, so the guard only matters when nothing is being added.
+  const survivors = input.live.length - removable.length;
+  const zeroCount =
+    create.length === 0 && survivors < 1
+      ? Math.min(1 - survivors, removable.length)
+      : 0;
+  return {
+    keep,
+    create,
+    remove: removable.slice(0, removable.length - zeroCount),
+    zero: removable.slice(removable.length - zeroCount),
+  };
+}
+
+/** Job attributes that can fill a product option when a new piece is added. */
+const OPTION_VALUE_SOURCES: Array<{
+  match: RegExp;
+  pick: (details?: ChannelJobVariantDetails) => string;
+}> = [
+  { match: /^(metal|material)$/i, pick: (d) => storefrontMetalLabel(d) },
+  {
+    match: /^(karat|carat|kt|purity|quality)$/i,
+    pick: (d) => displayToken(d?.purity || ""),
+  },
+  { match: /^colou?r$/i, pick: (d) => displayToken(d?.color || "") },
+  { match: /^(size|length)$/i, pick: (d) => displayToken(d?.size || "") },
+];
+
+/**
+ * Option values for a piece being added to a product the merchant now owns.
+ * Returns null when an option cannot be filled from job data — guessing would
+ * either collide with another piece or print something wrong on the storefront,
+ * so the piece is reported instead of forced on.
+ */
+export function newVariantOptionValues(
+  live: LiveProductState,
+  job: { jobNo: string; details?: ChannelJobVariantDetails },
+): Array<{ optionName: string; name: string }> | null {
+  const named = live.options.filter((o) => o.name && o.name !== DEFAULT_OPTION);
+  if (!named.length) return [];
+  const out: Array<{ optionName: string; name: string }> = [];
+  for (const option of named) {
+    let value = "";
+    if (isOwnedOption(option.name)) {
+      value = isLegacyJobOption(option.name)
+        ? job.jobNo.trim()
+        : storefrontMetalLabel(job.details) || job.jobNo.trim();
+    } else {
+      value = OPTION_VALUE_SOURCES.find((s) => s.match.test(option.name))
+        ?.pick(job.details) ?? "";
+    }
+    if (!value.trim()) return null;
+    out.push({ optionName: option.name, name: clipOptionValue(value) });
+  }
+  return out;
+}
+
+/** Merchant's price for this design, so a new piece does not land at 0.00. */
+function inheritedPrice(live: LiveVariant[], fallback: number): string {
+  for (const v of live) {
+    const n = Number(v.price);
+    if (Number.isFinite(n) && n > 0) return String(v.price);
+  }
+  return String(fallback);
+}
+
+/**
+ * The default update path: reconcile the live-stock variant set and nothing else.
+ *
+ * Writes only what DevJewels owns — which pieces exist, their job metafields and
+ * their SKU. Never sends product title, description, tags, product type, status,
+ * images, or the selling price of a variant that is already there, and never
+ * touches the product's option structure. Safe to run against a product the
+ * merchant has rebuilt in Shopify admin.
+ */
+export async function syncShopifyLiveStockVariants(
+  client: ShopifyAdminClient,
+  input: UpdateProductInput,
+): Promise<UpdateProductResult> {
+  const productId = input.externalProductId.trim();
+  let live = await readShopifyLiveProduct(client, productId);
+
+  const ownedJobNos = [
+    ...(input.existingVariants ?? []),
+    ...(input.removeVariants ?? []),
+  ].map((v) => v.jobNo);
+
+  // A design with no stock left arrives as a single design_no placeholder job.
+  // On a product that already carries real pieces, adding it would wipe the
+  // picker and replace it with a bare design code — the exact thing merchants
+  // complained about — so the placeholder is dropped there and the real pieces
+  // are zeroed instead. A product that never had pieces still gets it, so an
+  // out-of-stock design has something to sit on.
+  const ownedKeys = new Set(ownedJobNos.map(jobKey).filter(Boolean));
+  const hasRealPieces = live.variants.some(
+    (v) => jobKey(v.jobNo) && ownedKeys.has(jobKey(v.jobNo)),
+  );
+  const desiredJobNos = input.variants
+    .map((v) => v.jobNo.trim())
+    .filter(
+      (j) => j && !(hasRealPieces && jobKey(j) === jobKey(input.designNo)),
+    );
+
+  const plan = planLiveStockVariantSync({
+    live: live.variants,
+    desiredJobNos,
+    ownedJobNos,
+  });
+
+  const resultVariants: UpdateProductResult["variants"] = [];
+  // Healing: saved ids go stale whenever the merchant rebuilds variants in
+  // Shopify admin, so the live ids win and are handed back for re-mapping.
+  for (const { jobNo, variant } of plan.keep) {
+    resultVariants.push({
+      jobNo,
+      externalVariantId: variant.externalVariantId,
+      externalInventoryItemId: variant.externalInventoryItemId,
+    });
+  }
+  // Sold pieces come back too, with no live job behind them, so the caller
+  // zeroes their quantity before Shopify can sell a piece that is gone.
+  for (const variant of plan.zero) {
+    resultVariants.push({
+      jobNo: variant.jobNo,
+      externalVariantId: variant.externalVariantId,
+      externalInventoryItemId: variant.externalInventoryItemId,
+    });
+  }
+
+  if (plan.create.length) {
+    // A product we created for a single piece sits on Shopify's "Title"
+    // placeholder with no real option. A second piece cannot exist there, so
+    // the picker has to be added — it overwrites nothing the merchant wrote.
+    const hasRealOption = live.options.some(
+      (o) => o.name && o.name !== DEFAULT_OPTION,
+    );
+    if (!hasRealOption && live.variants.length + plan.create.length > 1) {
+      const labelFor = (job: { jobNo: string; details?: ChannelJobVariantDetails }) =>
+        clipOptionValue(storefrontMetalLabel(job.details) || job.jobNo.trim());
+      const existingLabels = plan.keep.map(({ variant }) => {
+        const job = input.variants.find(
+          (v) => jobKey(v.jobNo) === jobKey(variant.jobNo),
+        );
+        return job ? labelFor(job) : variant.jobNo.trim();
+      });
+      console.info("shopify_live_stock_option_added", {
+        connectionId: input.connectionId,
+        designNo: input.designNo,
+        optionName: STOREFRONT_OPTION,
+        pieces: live.variants.length + plan.create.length,
+      });
+      const createdOption = await client.graphql<{
+        productOptionsCreate?: {
+          userErrors?: Array<{ field?: string[]; message: string }>;
+        };
+      }>(PRODUCT_OPTIONS_CREATE, {
+        productId,
+        options: [
+          {
+            name: STOREFRONT_OPTION,
+            values: (existingLabels.length ? existingLabels : ["Default"]).map(
+              (name) => ({ name }),
+            ),
+          },
+        ],
+        variantStrategy: "LEAVE_AS_IS",
+      });
+      throwGraphqlErrors(createdOption.errors);
+      throwUserErrors(
+        createdOption.data?.productOptionsCreate?.userErrors,
+        "productOptionsCreate",
+      );
+      live = await readShopifyLiveProduct(client, productId);
+    }
+    const byJob = new Map(
+      input.variants.map((v) => [jobKey(v.jobNo), v] as const),
+    );
+    const creatable: Array<{
+      job: UpdateProductInput["variants"][number];
+      optionValues: Array<{ optionName: string; name: string }>;
+    }> = [];
+    const unfillable: string[] = [];
+    for (const jobNo of plan.create) {
+      const job = byJob.get(jobKey(jobNo));
+      if (!job) continue;
+      const optionValues = newVariantOptionValues(live, job);
+      if (!optionValues) {
+        unfillable.push(jobNo);
+        continue;
+      }
+      creatable.push({ job, optionValues });
+    }
+    if (unfillable.length) {
+      // Loud, not silent: the merchant changed the option structure to
+      // something job data cannot fill, so these pieces need a human.
+      console.warn("shopify_live_stock_variant_options_unfillable", {
+        connectionId: input.connectionId,
+        designNo: input.designNo,
+        options: live.optionNames,
+        jobNos: unfillable,
+      });
+    }
+    if (creatable.length) {
+      const price = inheritedPrice(live.variants, creatable[0].job.price);
+      const created = await client.graphql<BulkVariantData>(
+        PRODUCT_VARIANTS_BULK_CREATE,
+        {
+          productId,
+          variants: creatable.map(({ job, optionValues }) => ({
+            price,
+            inventoryItem: { sku: job.sku || job.jobNo },
+            metafields: variantMetafields(input.designNo, job.jobNo, job.details),
+            ...(optionValues.length ? { optionValues } : {}),
+          })),
+        },
+      );
+      throwGraphqlErrors(created.errors);
+      throwUserErrors(
+        created.data?.productVariantsBulkCreate?.userErrors,
+        "productVariantsBulkCreate",
+      );
+      const nodes = created.data?.productVariantsBulkCreate?.productVariants ?? [];
+      resultVariants.push(
+        ...matchVariants(
+          creatable.map(({ job }) => job),
+          nodes,
+        ),
+      );
+    }
+  }
+
+  // Sold pieces leave last: a product must keep a variant at every step, and
+  // new pieces are already in place by now.
+  if (plan.remove.length) {
+    const deleted = await client.graphql<{
+      productVariantsBulkDelete?: {
+        userErrors?: Array<{ field?: string[]; message: string }>;
+      };
+    }>(PRODUCT_VARIANTS_BULK_DELETE, {
+      productId,
+      variantsIds: plan.remove.map((v) => v.externalVariantId),
+    });
+    throwGraphqlErrors(deleted.errors);
+    const fatal = (deleted.data?.productVariantsBulkDelete?.userErrors ?? []).filter(
+      (e) => !/not found|does not exist|already been deleted/i.test(e.message),
+    );
+    if (fatal.length) throwUserErrors(fatal, "productVariantsBulkDelete");
+    console.info("shopify_live_stock_variants_removed", {
+      connectionId: input.connectionId,
+      designNo: input.designNo,
+      removed: plan.remove.length,
+    });
+  }
+
+
+  return { externalProductId: productId, variants: resultVariants };
+}
+
 /**
  * Update title/metafields, then reconcile variants against the live Shopify
  * product (not saved Channels ids): bulk-update jobs already there, bulk-create
@@ -1116,6 +1452,13 @@ export async function updateShopifyProduct(
   }
   if (!input.variants.length) {
     throw new ShopifyHttpError(400, "updateProduct requires at least one variant");
+  }
+
+  // Default for every shop: DevJewels owns live stock, the merchant owns the
+  // storefront. Rewriting product content is opt-in here, not at the call site,
+  // so a new caller cannot reintroduce the overwrite by forgetting a flag.
+  if (input.syncProductContent !== true) {
+    return syncShopifyLiveStockVariants(client, input);
   }
 
   const productId = input.externalProductId.trim();

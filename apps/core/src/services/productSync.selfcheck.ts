@@ -481,7 +481,9 @@ async function main(): Promise<void> {
       createMemoryConnectionStore([connectionA(), connectionB()]),
     );
 
-    // --- revoke → deleteProduct + mapping cleared ---
+    // --- revoke, merchant-owned catalog → stock zeroed, product kept ---
+    drainMemoryInventoryQueue();
+    const callsBeforeRevoke = calls.length;
     const deleted = await runProductSyncJob({
       kind: "product.sync",
       connectionId: CONN_A,
@@ -492,12 +494,47 @@ async function main(): Promise<void> {
     if (deleted !== "DELETED") {
       throw new Error(`expected DELETED, got ${deleted}`);
     }
+    if (calls.slice(callsBeforeRevoke).some((c) => c.includes("productDelete"))) {
+      throw new Error(
+        "revoke must not delete a merchant-owned product; its page is the merchant's work",
+      );
+    }
+    const zeroJobs = drainMemoryInventoryQueue();
+    if (!zeroJobs.length || zeroJobs.some((j) => j.quantity !== 0 || j.reason !== "revoked")) {
+      throw new Error(
+        `revoke must zero every mapped piece, got ${JSON.stringify(zeroJobs)}`,
+      );
+    }
+    if (!(await productMaps.getByDesign(CONN_A, "PS-1"))) {
+      throw new Error("mapping must survive revoke so re-entitlement restores stock");
+    }
+
+    // --- revoke, DevJewels-owned catalog → productDelete + mapping cleared ---
+    setConnectionStoreForTests(
+      createMemoryConnectionStore([
+        connectionA({ sync_product_content: true }),
+        connectionB(),
+      ]),
+    );
+    const hardDeleted = await runProductSyncJob({
+      kind: "product.sync",
+      connectionId: CONN_A,
+      platform: "SHOPIFY",
+      designNo: "PS-1",
+      action: "delete",
+    });
+    if (hardDeleted !== "DELETED") {
+      throw new Error(`expected DELETED, got ${hardDeleted}`);
+    }
     if (!calls.some((c) => c.includes("productDelete"))) {
-      throw new Error("expected productDelete GraphQL on revoke/delete");
+      throw new Error("sync_product_content=true must still call productDelete");
     }
     if (await productMaps.getByDesign(CONN_A, "PS-1")) {
       throw new Error("mapping must be cleared after delete");
     }
+    setConnectionStoreForTests(
+      createMemoryConnectionStore([connectionA(), connectionB()]),
+    );
 
     // Seed mappings for fan-out isolation tests
     await productMaps.upsert({
@@ -598,30 +635,41 @@ async function main(): Promise<void> {
     if (revokeOutcome !== "DELETED") {
       throw new Error(`revoke delete expected DELETED, got ${revokeOutcome}`);
     }
-    if (await productMaps.getByDesign(CONN_A, "PS-2")) {
-      throw new Error("PS-2 mapping must be cleared after revoke");
+    if (!(await productMaps.getByDesign(CONN_A, "PS-2"))) {
+      throw new Error("PS-2 mapping must survive revoke on a merchant-owned catalog");
     }
     if (!(await productMaps.getByDesign(CONN_A, "PS-1"))) {
       throw new Error("PS-1 must remain after revoke of PS-2 only");
     }
-    if (await variantMaps.getByDesignJob(CONN_A, "PS-2", "JOB-PS-2")) {
-      throw new Error("PS-2 variant mappings must be cleared after revoke");
+    if (!(await variantMaps.getByDesignJob(CONN_A, "PS-2", "JOB-PS-2"))) {
+      throw new Error("PS-2 variant mappings must survive so re-entitlement restores stock");
     }
     if (!(await variantMaps.getByDesignJob(CONN_A, "PS-1", "JOB-9"))) {
       throw new Error("PS-1 variant mapping must remain after revoke of PS-2");
     }
-    if (peekMemoryInventoryQueueDepth() !== 0) {
-      throw new Error("one-design revoke must not enqueue inventory zero for other designs");
+    const revokeZeroJobs = drainMemoryInventoryQueue();
+    if (
+      !revokeZeroJobs.length ||
+      revokeZeroJobs.some(
+        (j) => j.designNo !== "PS-2" || j.quantity !== 0 || j.reason !== "revoked",
+      )
+    ) {
+      throw new Error(
+        `one-design revoke must zero only that design: ${JSON.stringify(revokeZeroJobs)}`,
+      );
     }
     if (!(await productMaps.getByDesign(CONN_B, "PS-B1"))) {
       throw new Error("customer B mapping must be untouched by A's revoke");
     }
-    const revokeDeleteCall = calls.findLast((call) => call.includes("productDelete"));
-    if (!revokeDeleteCall?.includes("gid://shopify/Product/100")) {
-      throw new Error("revoke must delete only PS-2's mapped Shopify product");
-    }
 
     // A Shopify deletion failure must retain both mappings for SQS retry.
+    // Only a DevJewels-owned catalog deletes, so opt this connection in.
+    setConnectionStoreForTests(
+      createMemoryConnectionStore([
+        connectionA({ sync_product_content: true }),
+        connectionB(),
+      ]),
+    );
     await productMaps.upsert({
       connectionId: CONN_A,
       designNo: "PS-FAIL",
@@ -686,6 +734,9 @@ async function main(): Promise<void> {
     if (syncLogs.rows.at(-1)?.status !== "FAILED") {
       throw new Error("failed Shopify deletion must record FAILED sync_log");
     }
+    setConnectionStoreForTests(
+      createMemoryConnectionStore([connectionA(), connectionB()]),
+    );
     await runProductSyncJob({
       kind: "product.sync",
       connectionId: CONN_A,
@@ -731,37 +782,55 @@ async function main(): Promise<void> {
       externalProductId: "gid://shopify/Product/300",
     });
     drainMemoryProductQueue();
+    const mappedForCustomerA = [
+      ...(await productMaps.listByConnection(CONN_A)).map(
+        (m) => `${CONN_A}:${m.design_no}`,
+      ),
+      ...(await productMaps.listByConnection(CONN_A2)).map(
+        (m) => `${CONN_A2}:${m.design_no}`,
+      ),
+    ].sort();
     const keyRevoked = await fanOutEntitlementChanged(
       entitlementEvent("key_revoked", 7, []),
     );
-    if (keyRevoked.enqueued !== 3) {
+    if (keyRevoked.enqueued !== mappedForCustomerA.length) {
       throw new Error(
-        `key_revoked expected all three customer mappings, got ${keyRevoked.enqueued}`,
+        `key_revoked expected every mapped design (${mappedForCustomerA.length}), got ${keyRevoked.enqueued}`,
       );
     }
     const keyJobs = drainMemoryProductQueue();
+    const keyTargets = keyJobs.map((j) => `${j.connectionId}:${j.designNo}`).sort();
     if (
-      keyJobs.length !== 3 ||
-      !keyJobs.every(
-        (j) =>
-          (j.connectionId === CONN_A || j.connectionId === CONN_A2) &&
-          j.action === "delete",
-      )
+      JSON.stringify(keyTargets) !== JSON.stringify(mappedForCustomerA) ||
+      !keyJobs.every((j) => j.action === "delete")
     ) {
       throw new Error(`key_revoked jobs wrong: ${JSON.stringify(keyJobs)}`);
     }
+    drainMemoryInventoryQueue();
+    const callsBeforeKeyRevoke = calls.length;
     for (const job of keyJobs) {
       const outcome = await runProductSyncJob(job);
       if (outcome !== "DELETED") {
         throw new Error(`key_revoked delete expected DELETED, got ${outcome}`);
       }
     }
-    const aLeft = await productMaps.listByConnection(CONN_A);
-    if (aLeft.length !== 0) {
-      throw new Error(`customer A mappings must be empty after key_revoked, got ${aLeft.length}`);
+    // Merchant-owned catalogs: a revoked key takes every piece off sale and
+    // leaves the storefront pages alone.
+    if (calls.slice(callsBeforeKeyRevoke).some((c) => c.includes("productDelete"))) {
+      throw new Error("key_revoked must not delete merchant-owned products");
     }
-    if ((await productMaps.listByConnection(CONN_A2)).length !== 0) {
-      throw new Error("all shops for customer A must be empty after key_revoked");
+    const keyZeroJobs = drainMemoryInventoryQueue();
+    if (
+      !keyZeroJobs.length ||
+      keyZeroJobs.some((j) => j.quantity !== 0 || j.reason !== "revoked") ||
+      keyZeroJobs.some((j) => j.connectionId === CONN_B)
+    ) {
+      throw new Error(
+        `key_revoked must zero customer A pieces only: ${JSON.stringify(keyZeroJobs)}`,
+      );
+    }
+    if ((await productMaps.listByConnection(CONN_A)).length !== keyJobs.filter((j) => j.connectionId === CONN_A).length) {
+      throw new Error("key_revoked must keep merchant-owned mappings for re-entitlement");
     }
     if (!(await productMaps.getByDesign(CONN_B, "PS-B1"))) {
       throw new Error("customer B must be untouched by A's key_revoked");
@@ -807,6 +876,16 @@ async function main(): Promise<void> {
     }
 
     // Explicit re-grant restores flags and backfills without duplicate mappings.
+    // Revoke keeps merchant-owned mappings, so clear them here to test the
+    // backfill path a shop reaches after its products are genuinely gone.
+    for (const connectionId of [CONN_A, CONN_A2]) {
+      for (const mapping of await productMaps.listByConnection(connectionId)) {
+        await productMaps.deleteByDesign(connectionId, mapping.design_no);
+        await variantMaps.deleteByDesign(connectionId, mapping.design_no);
+      }
+    }
+    drainMemoryProductQueue();
+    drainMemoryInventoryQueue();
     entState.keyPresent = true;
     entState.canViewDesigns = true;
     entState.canViewInventory = true;

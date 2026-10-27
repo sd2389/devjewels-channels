@@ -251,35 +251,6 @@ async function importOneDesign(input: {
         input.connectionId,
         input.designNo,
       );
-      if (!input.syncProductContent) {
-        if (input.canViewInventory && input.syncInventory) {
-          for (const mapped of allMapped) {
-            const live = variants.find(
-              (v) =>
-                v.jobNo.trim().toUpperCase() ===
-                mapped.job_no.trim().toUpperCase(),
-            );
-            await enqueueInventorySync({
-              kind: "inventory.sync",
-              connectionId: input.connectionId,
-              platform: input.platform,
-              designNo: input.designNo,
-              jobNo: mapped.job_no,
-              quantity: live?.quantity ?? 0,
-              ...(live != null ? { unitCost: live.wholesaleCost } : {}),
-            });
-          }
-        }
-        await writeSyncLog({
-          connectionId: input.connectionId,
-          platform: input.platform,
-          jobType: "product",
-          status: "SUCCESS",
-          designNo: input.designNo,
-          message: `inventory_only mapped=${allMapped.length} (content sync off)`,
-        });
-        return "ok";
-      }
       const existingVariants = [];
       for (const v of variants) {
         const mapped = allMapped.find(
@@ -307,6 +278,7 @@ async function importOneDesign(input: {
         connectionId: input.connectionId,
         designNo: input.designNo,
         title: input.title,
+        syncProductContent: input.syncProductContent,
         credentialsSecretRef: input.credentialsSecretRef ?? undefined,
         externalProductId: existing.external_product_id,
         imageUrls: input.imageUrls,
@@ -321,6 +293,7 @@ async function importOneDesign(input: {
         connectionId: input.connectionId,
         designNo: input.designNo,
         title: input.title,
+        syncProductContent: input.syncProductContent,
         credentialsSecretRef: input.credentialsSecretRef ?? undefined,
         imageUrls: input.imageUrls,
         productType: input.productType,
@@ -355,15 +328,18 @@ async function importOneDesign(input: {
 
     if (input.canViewInventory && input.syncInventory) {
       for (const variant of result.variants) {
-        const quantity =
-          variants.find((candidate) => candidate.jobNo === variant.jobNo)?.quantity ?? 0;
+        const live = variants.find(
+          (candidate) => candidate.jobNo === variant.jobNo,
+        );
         await enqueueInventorySync({
           kind: "inventory.sync",
           connectionId: input.connectionId,
           platform: input.platform,
           designNo: input.designNo,
           jobNo: variant.jobNo,
-          quantity,
+          // No live job behind the variant means the piece is sold — zero it.
+          quantity: live?.quantity ?? 0,
+          ...(live != null ? { unitCost: live.wholesaleCost } : {}),
         });
       }
     }

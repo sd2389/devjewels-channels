@@ -221,6 +221,8 @@ async function main(): Promise<void> {
   const { updateShopifyProduct } = await import("./products");
   const updated = await updateShopifyProduct(client, {
     connectionId: "c",
+    // This block covers the opt-in path where DevJewels owns the storefront copy.
+    syncProductContent: true,
     designNo: "D1",
     title: "D1 Updated",
     externalProductId: "gid://shopify/Product/9",
@@ -248,6 +250,8 @@ async function main(): Promise<void> {
 
   const updatedNewJob = await updateShopifyProduct(client, {
     connectionId: "c",
+    // This block covers the opt-in path where DevJewels owns the storefront copy.
+    syncProductContent: true,
     designNo: "D1",
     title: "D1 Updated",
     externalProductId: "gid://shopify/Product/9",
@@ -451,6 +455,8 @@ async function storefrontMetalUpdateSelfcheck(): Promise<void> {
   const { updateShopifyProduct } = await import("./products");
   await updateShopifyProduct(client, {
     connectionId: "c",
+    // This block covers the opt-in path where DevJewels owns the storefront copy.
+    syncProductContent: true,
     designNo: "DR-941_OVL_5.00",
     title: "DR-941_OVL_5.00",
     externalProductId: "gid://shopify/Product/80",
@@ -564,6 +570,8 @@ async function merchantEditedProductSelfcheck(
 
   const result = await updateShopifyProduct(client, {
     connectionId: "c",
+    // This block covers the opt-in path where DevJewels owns the storefront copy.
+    syncProductContent: true,
     designNo: "D50",
     title: "D50",
     externalProductId: "gid://shopify/Product/50",
@@ -590,7 +598,11 @@ async function merchantEditedProductSelfcheck(
     throw new Error(`J2 should be re-created: ${JSON.stringify(byJob)}`);
   }
 
-  // Merchant added their own options: do not guess, fail with an actionable message.
+  // Merchant added their own options.
+  // Content sync ON (DevJewels owns the copy): fail with an actionable message
+  // rather than guessing what the extra option should hold.
+  // Content sync OFF (the default): the merchant is allowed to restructure, so
+  // the sync must keep running and only report the pieces it cannot place.
   const custom = createShopifyClient({
     shopDomain: "custom.myshopify.com",
     accessToken: "shpat_x",
@@ -615,6 +627,7 @@ async function merchantEditedProductSelfcheck(
       designNo: "D51",
       title: "D51",
       externalProductId: "gid://shopify/Product/51",
+      syncProductContent: true,
       variants: [{ jobNo: "J9", price: 10, quantity: 1 }],
     });
   } catch (err) {
@@ -622,6 +635,24 @@ async function merchantEditedProductSelfcheck(
   }
   if (!message.includes("options were changed")) {
     throw new Error(`expected options-changed error, got: ${message || "no error"}`);
+  }
+
+  let merchantOwnedError = "";
+  try {
+    await updateShopifyProduct(custom, {
+      connectionId: "c",
+      designNo: "D51",
+      title: "D51",
+      externalProductId: "gid://shopify/Product/51",
+      variants: [{ jobNo: "J9", price: 10, quantity: 1 }],
+    });
+  } catch (err) {
+    merchantOwnedError = err instanceof Error ? err.message : String(err);
+  }
+  if (merchantOwnedError) {
+    throw new Error(
+      `a merchant-restructured product must not break the sync, got: ${merchantOwnedError}`,
+    );
   }
 }
 

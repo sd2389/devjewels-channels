@@ -80,11 +80,20 @@ export type CreateProductInput = {
    * (before variants/media). Prevents orphan duplicates on retry.
    */
   onExternalProductId?: (externalProductId: string) => Promise<void>;
+  /**
+   * Merchant owns storefront copy by default. When false (the default) the
+   * adapter may only reconcile the live-stock variant set + quantity + unit
+   * cost; titles, descriptions, selling prices, tags, images, product status
+   * and merchant-made options must not be written.
+   */
+  syncProductContent?: boolean;
   /** Variants keyed by job_no for mapping. */
   variants: Array<{
     jobNo: string;
     sku?: string;
     price: number;
+    /** DevJewels wholesale cost for inventoryItem.cost. Never the selling price. */
+    wholesaleCost?: number;
     quantity: number;
     /** Live stock attributes for Shopify metafields / description. */
     details?: ChannelJobVariantDetails;

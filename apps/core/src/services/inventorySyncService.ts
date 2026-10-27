@@ -84,16 +84,21 @@ export async function runInventorySyncJob(
     return "SKIPPED";
   }
 
+  // Taking a revoked design off sale is the one write that must survive the
+  // entitlement gate — the design is gone from the feed by definition, and
+  // skipping here would leave a sold-out piece buyable on the storefront.
+  const revoking = job.reason === "revoked";
   const { requireSyncableEntitlements, designInFeed } = await import(
     "@/services/entitlements"
   );
-  const entitlements = await requireSyncableEntitlements(connection.customer_id, {
-    fresh: true,
-  });
+  const entitlements = revoking
+    ? null
+    : await requireSyncableEntitlements(connection.customer_id, { fresh: true });
   if (
-    !entitlements ||
-    !entitlements.permissions.can_view_inventory ||
-    !designInFeed(entitlements, job.designNo)
+    !revoking &&
+    (!entitlements ||
+      !entitlements.permissions.can_view_inventory ||
+      !designInFeed(entitlements, job.designNo))
   ) {
     await writeSyncLog({
       connectionId: job.connectionId,
@@ -136,8 +141,8 @@ export async function runInventorySyncJob(
       connectionId: job.connectionId,
       designNo: job.designNo,
       jobNo: job.jobNo,
-      quantity: job.quantity,
-      ...(job.unitCost != null && Number.isFinite(job.unitCost)
+      quantity: revoking ? 0 : job.quantity,
+      ...(!revoking && job.unitCost != null && Number.isFinite(job.unitCost)
         ? { unitCost: job.unitCost }
         : {}),
       externalInventoryItemId: mapping.external_inventory_item_id,
@@ -150,7 +155,7 @@ export async function runInventorySyncJob(
       status: "SUCCESS",
       designNo: job.designNo,
       jobNo: job.jobNo,
-      message: "ok",
+      message: revoking ? "revoked_zeroed" : "ok",
     });
     return "SUCCESS";
   } catch (err) {

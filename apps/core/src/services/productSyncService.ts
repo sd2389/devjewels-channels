@@ -96,6 +96,37 @@ async function runProductDelete(
     return "SKIPPED";
   }
 
+  // A merchant-owned product is never deleted: its page, URL, photos, reviews
+  // and SEO are the merchant's work, and a revoke must not destroy them. Zeroing
+  // every mapped piece takes the design off sale, which is what revoke is for,
+  // and leaves the mappings so re-entitlement puts stock straight back.
+  if (!connection.sync_product_content) {
+    const mapped = await getVariantMappingStore().listByDesign(
+      job.connectionId,
+      designNo,
+    );
+    for (const variant of mapped) {
+      await enqueueInventorySync({
+        kind: "inventory.sync",
+        connectionId: job.connectionId,
+        platform: job.platform,
+        designNo,
+        jobNo: variant.job_no,
+        quantity: 0,
+        reason: "revoked",
+      });
+    }
+    await writeSyncLog({
+      connectionId: job.connectionId,
+      platform: job.platform,
+      jobType: "product",
+      status: "SUCCESS",
+      designNo,
+      message: `revoked_zeroed pieces=${mapped.length} (product kept, merchant owns content)`,
+    });
+    return "DELETED";
+  }
+
   const adapter = AdapterRouter.get(job.platform);
   try {
     await adapter.deleteProduct({
@@ -368,45 +399,6 @@ export async function runProductSyncJob(
         designNo,
       );
 
-      // Merchant-owned catalog (default): never rewrite Shopify product content.
-      // Only refresh qty + wholesale cost on variants we already mapped.
-      if (!connection.sync_product_content) {
-        resultVariants = [];
-        for (const mapped of allMapped) {
-          const live = variants.find(
-            (v) =>
-              v.jobNo.trim().toUpperCase() === mapped.job_no.trim().toUpperCase(),
-          );
-          resultVariants.push({
-            jobNo: mapped.job_no,
-            externalVariantId: mapped.external_variant_id,
-            externalInventoryItemId:
-              mapped.external_inventory_item_id ?? undefined,
-          });
-          if (canViewInventory && connection.sync_inventory) {
-            await enqueueInventorySync({
-              kind: "inventory.sync",
-              connectionId: job.connectionId,
-              platform: job.platform,
-              designNo,
-              jobNo: mapped.job_no,
-              quantity: live?.quantity ?? 0,
-              ...(live != null ? { unitCost: live.wholesaleCost } : {}),
-            });
-          }
-        }
-        outcome = "UPDATED";
-        await writeSyncLog({
-          connectionId: job.connectionId,
-          platform: job.platform,
-          jobType: "product",
-          status: "SUCCESS",
-          designNo,
-          message: `inventory_only mapped=${resultVariants.length} (content sync off)`,
-        });
-        return outcome;
-      }
-
       const existingVariants = [];
       for (const v of variants) {
         const mapped = allMapped.find(
@@ -435,6 +427,7 @@ export async function runProductSyncJob(
         connectionId: job.connectionId,
         designNo,
         title,
+        syncProductContent: connection.sync_product_content,
         credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
         externalProductId: existing.external_product_id,
         imageUrls,
@@ -468,13 +461,16 @@ export async function runProductSyncJob(
         jobType: "product",
         status: "SUCCESS",
         designNo,
-        message: `updated variants=${updated.variants.length} removed=${removeVariants.length}`,
+        message: connection.sync_product_content
+          ? `updated variants=${updated.variants.length} removed=${removeVariants.length}`
+          : `live_stock_only variants=${updated.variants.length} (merchant owns content)`,
       });
     } else {
       const created = await adapter.createProduct({
         connectionId: job.connectionId,
         designNo,
         title,
+        syncProductContent: connection.sync_product_content,
         credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
         imageUrls,
         productType,
@@ -519,15 +515,16 @@ export async function runProductSyncJob(
     // Immediately set inventory after create/update when permission allows.
     if (canViewInventory && connection.sync_inventory) {
       for (const variant of resultVariants) {
-        const qty =
-          variants.find((v) => v.jobNo === variant.jobNo)?.quantity ?? 0;
+        const live = variants.find((v) => v.jobNo === variant.jobNo);
         await enqueueInventorySync({
           kind: "inventory.sync",
           connectionId: job.connectionId,
           platform: job.platform,
           designNo,
           jobNo: variant.jobNo,
-          quantity: qty,
+          // No live job behind the variant means the piece is sold — zero it.
+          quantity: live?.quantity ?? 0,
+          ...(live != null ? { unitCost: live.wholesaleCost } : {}),
         });
       }
     }

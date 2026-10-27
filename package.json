@@ -10,7 +10,10 @@
     "build": "npm run build -w @devjewels-channels/core",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "sst:dev": "sst dev --stage production",
-    "sst:deploy": "sst deploy --stage production"
+    "sst:deploy": "sst deploy --stage production",
+    "selfcheck": "npm run selfcheck:core && npm run selfcheck:shopify",
+    "selfcheck:core": "npm run --silent selfcheck:events -w @devjewels-channels/core && npm run --silent selfcheck:catalog -w @devjewels-channels/core && npm run --silent selfcheck:product-sync -w @devjewels-channels/core && npm run --silent selfcheck:orders -w @devjewels-channels/core && npm run --silent selfcheck:connect -w @devjewels-channels/core && npm run --silent selfcheck:design-markup -w @devjewels-channels/core && npm run --silent selfcheck:job-details -w @devjewels-channels/core && npm run --silent selfcheck:channel-inventory-jobs -w @devjewels-channels/core && npm run --silent selfcheck:channel-order-lines -w @devjewels-channels/core && npm run --silent selfcheck:shopify-compliance -w @devjewels-channels/core",
+    "selfcheck:shopify": "npm run --silent selfcheck:merchant-catalog -w @devjewels-channels/shopify && npm run --silent selfcheck:catalog-orders -w @devjewels-channels/shopify && npm run --silent selfcheck:invite -w @devjewels-channels/shopify && npm run --silent selfcheck:inventory -w @devjewels-channels/shopify && npm run --silent selfcheck:job-details -w @devjewels-channels/shopify"
   },
   "devDependencies": {
     "sst": "^3.17.10",
