@@ -142,6 +142,12 @@ async function main(): Promise<void> {
   const webhooks = createMemoryWebhookEventStore();
   setSyncLogStoreForTests(syncLogs);
   setWebhookEventStoreForTests(webhooks);
+  // Order processing resolves lines through variant_mapping. Without a memory
+  // store that reaches for DATABASE_URL, so the run only passed on a machine
+  // with a database to hand. Section 11 re-seeds this with its own rows.
+  const { createMemoryVariantMappingStore, setVariantMappingStoreForTests } =
+    await import("./variantMappings");
+  setVariantMappingStoreForTests(createMemoryVariantMappingStore([]));
   const connections = createMemoryConnectionStore([
       {
         id: CONN,
@@ -468,10 +474,6 @@ async function main(): Promise<void> {
   }
 
   // 11) Real Shopify checkout shape: SKU + variant_id, no line properties → mapping resolve
-  const {
-    createMemoryVariantMappingStore,
-    setVariantMappingStoreForTests,
-  } = await import("./variantMappings");
   setVariantMappingStoreForTests(
     createMemoryVariantMappingStore([
       {
