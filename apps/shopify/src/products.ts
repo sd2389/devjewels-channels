@@ -1113,7 +1113,15 @@ export function planLiveStockVariantSync(input: {
   /** Job numbers Channels has mapped for this design. */
   ownedJobNos: string[];
 }): LiveStockVariantPlan {
-  const desired = new Set(input.desiredJobNos.map(jobKey).filter(Boolean));
+  // Callers match the returned jobNo against the live feed with ===, so a SKU
+  // that differs only in casing ("j1" for "J1") has to come back in the feed's
+  // spelling or the piece reads as sold and gets zeroed while still in stock.
+  const desiredByKey = new Map<string, string>();
+  for (const jobNo of input.desiredJobNos) {
+    const key = jobKey(jobNo);
+    if (key && !desiredByKey.has(key)) desiredByKey.set(key, jobNo.trim());
+  }
+  const desired = new Set(desiredByKey.keys());
   const owned = new Set(input.ownedJobNos.map(jobKey).filter(Boolean));
 
   const keep: LiveStockVariantPlan["keep"] = [];
@@ -1124,7 +1132,7 @@ export function planLiveStockVariantSync(input: {
     const key = jobKey(variant.jobNo);
     if (key && desired.has(key) && !seen.has(key)) {
       seen.add(key);
-      keep.push({ jobNo: variant.jobNo.trim(), variant });
+      keep.push({ jobNo: desiredByKey.get(key) ?? variant.jobNo.trim(), variant });
       continue;
     }
     // Only a piece that has genuinely left live stock is removed. A merchant
@@ -1357,6 +1365,9 @@ export async function syncShopifyLiveStockVariants(
     );
   }
 
+  // How many pieces Shopify actually accepted, which the removal guard below
+  // counts — not how many the planner hoped to add.
+  let createdCount = 0;
   if (plan.create.length) {
     // A product we created for a single piece sits on Shopify's "Title"
     // placeholder with no real option. A second piece cannot exist there, so
@@ -1455,25 +1466,43 @@ export async function syncShopifyLiveStockVariants(
         "productVariantsBulkCreate",
       );
       const nodes = created.data?.productVariantsBulkCreate?.productVariants ?? [];
-      resultVariants.push(
-        ...matchVariants(
-          creatable.map(({ job }) => job),
-          nodes,
-        ),
+      const madeVariants = matchVariants(
+        creatable.map(({ job }) => job),
+        nodes,
       );
+      createdCount += madeVariants.length;
+      resultVariants.push(...madeVariants);
     }
   }
 
   // Sold pieces leave last: a product must keep a variant at every step, and
   // new pieces are already in place by now.
-  if (plan.remove.length) {
+  //
+  // The planner's guard assumed every piece it listed would be created. Some
+  // may have been dropped just above (a merchant option job data cannot fill),
+  // so recount against what Shopify actually has: deleting the last variant
+  // fails with CANNOT_DELETE_LAST_VARIANT and aborts the sync before the
+  // caller can zero anything, leaving sold stock on sale.
+  const toRemove = [...plan.remove];
+  let survivors = live.variants.length - toRemove.length + createdCount;
+  while (survivors < 1 && toRemove.length > 0) {
+    const retained = toRemove.pop()!;
+    resultVariants.push({
+      jobNo: retained.jobNo,
+      externalVariantId: retained.externalVariantId,
+      externalInventoryItemId: retained.externalInventoryItemId,
+    });
+    survivors += 1;
+  }
+
+  if (toRemove.length) {
     const deleted = await client.graphql<{
       productVariantsBulkDelete?: {
         userErrors?: Array<{ field?: string[]; message: string }>;
       };
     }>(PRODUCT_VARIANTS_BULK_DELETE, {
       productId,
-      variantsIds: plan.remove.map((v) => v.externalVariantId),
+      variantsIds: toRemove.map((v) => v.externalVariantId),
     });
     throwGraphqlErrors(deleted.errors);
     const fatal = (deleted.data?.productVariantsBulkDelete?.userErrors ?? []).filter(
@@ -1483,7 +1512,7 @@ export async function syncShopifyLiveStockVariants(
     console.info("shopify_live_stock_variants_removed", {
       connectionId: input.connectionId,
       designNo: input.designNo,
-      removed: plan.remove.length,
+      removed: toRemove.length,
     });
   }
 

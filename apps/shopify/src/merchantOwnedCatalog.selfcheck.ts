@@ -515,6 +515,79 @@ async function main(): Promise<void> {
     JSON.stringify(twinValues),
   );
 
+  console.log("a SKU that differs only in casing");
+
+  // Callers match the returned jobNo against the live feed with ===, so the
+  // feed's spelling has to come back or an in-stock piece reads as sold.
+  const casing = fakeClient({
+    options: [{ name: "Metal", values: ["14K White Gold"] }],
+    variants: [
+      {
+        id: "gid://shopify/ProductVariant/500",
+        sku: "de-093_b2.00",
+        price: "1400.00",
+        options: [{ name: "Metal", value: "14K White Gold" }],
+      },
+    ],
+  });
+  const casingResult = await updateShopifyProduct(
+    casing.client,
+    updateInput({
+      variants: [job("DE-093_B2.00")],
+      existingVariants: [
+        { jobNo: "DE-093_B2.00", externalVariantId: "gid://shopify/ProductVariant/500" },
+      ],
+    }) as never,
+  );
+  check(
+    "the job number comes back in the feed's spelling, not the SKU's",
+    casingResult.variants.map((v) => v.jobNo).join() === "DE-093_B2.00",
+    JSON.stringify(casingResult.variants),
+  );
+
+  console.log("every piece sold and the replacement cannot be placed");
+
+  // The planner assumed its planned creation would land. When the merchant's
+  // option structure blocks it, deleting anyway would hit
+  // CANNOT_DELETE_LAST_VARIANT and abort before anything could be zeroed.
+  const blocked = fakeClient({
+    options: [
+      { name: "Metal", values: ["14K White Gold"] },
+      { name: "Gift Wrap", values: ["None"] },
+    ],
+    variants: [
+      {
+        id: "gid://shopify/ProductVariant/600",
+        sku: "DE-093_OLD",
+        price: "1400.00",
+        options: [
+          { name: "Metal", value: "14K White Gold" },
+          { name: "Gift Wrap", value: "None" },
+        ],
+      },
+    ],
+  });
+  const blockedResult = await updateShopifyProduct(
+    blocked.client,
+    updateInput({
+      variants: [job("DE-093_NEW")],
+      existingVariants: [
+        { jobNo: "DE-093_OLD", externalVariantId: "gid://shopify/ProductVariant/600" },
+      ],
+    }) as never,
+  );
+  check(
+    "the last variant is never deleted",
+    !blocked.calls.some((c) => c.op === "productVariantsBulkDelete"),
+    blocked.calls.map((c) => c.op).join(", "),
+  );
+  check(
+    "it comes back instead, so the caller zeroes it",
+    blockedResult.variants.map((v) => v.externalVariantId).join() ===
+      "gid://shopify/ProductVariant/600",
+    JSON.stringify(blockedResult.variants),
+  );
+
   console.log("update: content sync on (merchant opted in)");
 
   const on = merchantProduct();
