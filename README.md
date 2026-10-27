@@ -107,6 +107,41 @@ To hand a shop's catalog copy back to DevJewels:
 UPDATE channels.connection SET sync_product_content = TRUE WHERE id = '<uuid>';
 ```
 
+### Piece details on the storefront
+
+Every piece carries its stock-table row as variant metafields in namespace
+`devjewels`: `job_no` `design_no` `metal` `purity` `color` `diamond_type`
+`dia_qly` `dia_clr` `gwt` `nwt` `dwt` `swt` `size` `store` `category`
+`certificate`.
+
+The list lives in `apps/shopify/src/variantMetafieldSchema.ts` and feeds both
+writers, so values and definitions cannot drift apart:
+
+- `variantMetafields` writes the values — on add **and** on every later sync, so
+  a certificate added or a size corrected upstream reaches the storefront.
+- `ensureShopifyVariantMetafieldDefinitions` declares them to Shopify with
+  `access: { admin: MERCHANT_READ, storefront: PUBLIC_READ }`. Without a
+  definition the values are stored but not reliably readable from Liquid or the
+  Storefront API, which is why the details were invisible before.
+
+Definitions are created at connect and re-asserted at catalog import, so a shop
+connected earlier heals on its next import. Creating one that already exists is
+a no-op; the storefront access is re-applied in case it was off. The whole step
+is best effort — it is logged as `shopify_metafield_definitions_ensured` and
+never fails a connect or an import. `write_products` already covers it, so no
+merchant re-authorization is needed.
+
+A theme reads them per variant:
+
+```liquid
+{{ variant.metafields.devjewels.dia_qly }}
+{{ variant.metafields.devjewels.certificate }}
+```
+
+A detail the job does not carry is omitted rather than written blank (Shopify
+rejects an empty text field), so a value that becomes empty upstream keeps its
+last known value until it is cleared in Shopify.
+
 ## Queues (SST)
 
 Owned by core, shared across platforms:

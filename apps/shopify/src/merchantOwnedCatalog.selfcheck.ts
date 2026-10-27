@@ -273,10 +273,36 @@ async function main(): Promise<void> {
   for (const mutation of MERCHANT_OWNED_MUTATIONS) {
     check(`never sends ${mutation}`, !offOps.includes(mutation), offOps.join(", "));
   }
+  // Piece details are refreshed on variants already there, but that update is
+  // allowed to carry metafields and nothing else.
+  const offUpdates = off.calls
+    .filter((c) => c.op === "productVariantsBulkUpdate")
+    .flatMap((c) => (c.variables.variants ?? []) as Array<Record<string, unknown>>);
   check(
     "never rewrites the price of a piece already on the product",
-    !off.calls.some((c) => c.op === "productVariantsBulkUpdate"),
-    offOps.join(", "),
+    offUpdates.every((v) => !("price" in v)),
+    JSON.stringify(offUpdates),
+  );
+  check(
+    "never rewrites the SKU of a piece already on the product",
+    offUpdates.every((v) => !("inventoryItem" in v)),
+    JSON.stringify(offUpdates),
+  );
+  check(
+    "piece details are refreshed, not left to go stale",
+    offUpdates.length === 2 &&
+      offUpdates.every(
+        (v) => Array.isArray(v.metafields) && (v.metafields as unknown[]).length > 0,
+      ),
+    JSON.stringify(offUpdates),
+  );
+  const refreshedKeys = (
+    (offUpdates[0]?.metafields ?? []) as Array<{ key: string; namespace: string }>
+  ).map((m) => m.key);
+  check(
+    "the refresh carries the stock-table fields",
+    ["job_no", "metal", "purity", "color"].every((k) => refreshedKeys.includes(k)),
+    refreshedKeys.join(", "),
   );
 
   const soldOut = merchantProduct();

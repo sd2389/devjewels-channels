@@ -10,6 +10,11 @@ import type {
   UpdateProductResult,
 } from "@devjewels-channels/core/channels/types";
 import type { ShopifyAdminClient } from "./client";
+import {
+  buildVariantMetafields,
+  DEVJEWELS_METAFIELD_NAMESPACE,
+  type ShopifyMetafieldInput,
+} from "./variantMetafieldSchema";
 import { ShopifyHttpError } from "./client";
 
 /** Shown on Shopify product Vendor — marks DevJewels catalog lines. */
@@ -24,32 +29,10 @@ const NEW_SHOPIFY_PRODUCT_STATUS = "DRAFT";
 /** Cap product description job rows (scale: avoid multi-MB HTML). */
 const DESCRIPTION_JOB_CAP = 40;
 
-type ShopifyMetafieldInput = {
-  namespace: string;
-  key: string;
-  type: string;
-  value: string;
-};
-
-function pushMetafield(
-  out: ShopifyMetafieldInput[],
-  key: string,
-  value: string | undefined,
-): void {
-  const v = String(value || "").trim();
-  if (!v) return;
-  out.push({
-    namespace: "devjewels",
-    key,
-    type: "single_line_text_field",
-    value: v,
-  });
-}
-
 function designMetafields(designNo: string) {
   return [
     {
-      namespace: "devjewels",
+      namespace: DEVJEWELS_METAFIELD_NAMESPACE,
       key: "design_no",
       type: "single_line_text_field",
       value: designNo,
@@ -57,33 +40,13 @@ function designMetafields(designNo: string) {
   ];
 }
 
-/**
- * Variant metafields under namespace `devjewels`.
- * Keys mirror DevJewels UI labels (Job No, Store, Metal, …).
- */
+/** Variant metafields for one piece — see variantMetafieldSchema for the list. */
 export function variantMetafields(
   designNo: string,
   jobNo: string,
   details?: ChannelJobVariantDetails,
 ): ShopifyMetafieldInput[] {
-  const out: ShopifyMetafieldInput[] = [];
-  pushMetafield(out, "job_no", jobNo);
-  pushMetafield(out, "design_no", designNo);
-  pushMetafield(out, "store", details?.store);
-  pushMetafield(out, "category", details?.category);
-  pushMetafield(out, "metal", details?.metal);
-  pushMetafield(out, "purity", details?.purity);
-  pushMetafield(out, "color", details?.color);
-  pushMetafield(out, "dia_qly", details?.diaQly);
-  pushMetafield(out, "dia_clr", details?.diaClr);
-  pushMetafield(out, "diamond_type", details?.diamondType);
-  pushMetafield(out, "size", details?.size);
-  pushMetafield(out, "gwt", details?.gwt);
-  pushMetafield(out, "nwt", details?.nwt);
-  pushMetafield(out, "dwt", details?.dwt);
-  pushMetafield(out, "swt", details?.swt);
-  pushMetafield(out, "certificate", details?.certificate?.slice(0, 255));
-  return out;
+  return buildVariantMetafields({ designNo, jobNo, details });
 }
 
 function escapeHtml(raw: string): string {
@@ -1306,6 +1269,32 @@ export async function syncShopifyLiveStockVariants(
       externalVariantId: variant.externalVariantId,
       externalInventoryItemId: variant.externalInventoryItemId,
     });
+  }
+
+  // Refresh the piece details on pieces already there. These are DevJewels
+  // facts (certificate, weights, dia quality), so a correction upstream has to
+  // reach the storefront; without this they were written once at add time and
+  // then went stale forever. Metafields only — no price, no SKU, nothing the
+  // merchant owns.
+  const detailUpdates = plan.keep
+    .map(({ jobNo, variant }) => {
+      const job = input.variants.find((v) => jobKey(v.jobNo) === jobKey(jobNo));
+      if (!job) return null;
+      const metafields = variantMetafields(input.designNo, job.jobNo, job.details);
+      if (!metafields.length) return null;
+      return { id: variant.externalVariantId, metafields };
+    })
+    .filter((v): v is { id: string; metafields: ShopifyMetafieldInput[] } => v !== null);
+  if (detailUpdates.length) {
+    const refreshed = await client.graphql<BulkVariantData>(
+      PRODUCT_VARIANTS_BULK_UPDATE,
+      { productId, variants: detailUpdates },
+    );
+    throwGraphqlErrors(refreshed.errors);
+    throwUserErrors(
+      refreshed.data?.productVariantsBulkUpdate?.userErrors,
+      "productVariantsBulkUpdate",
+    );
   }
 
   if (plan.create.length) {

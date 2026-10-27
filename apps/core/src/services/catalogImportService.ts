@@ -435,6 +435,14 @@ export async function runCatalogImport(
     );
   }
 
+  // Declare the piece-detail fields to the channel before pushing products, so
+  // a shop connected before definitions existed heals on its next import.
+  const setupAdapter = AdapterRouter.get(connection.platform);
+  await setupAdapter.ensureChannelMetadata?.({
+    connectionId: connection.id,
+    credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
+  });
+
   const store = getCatalogImportStore();
   const job =
     options.importId != null

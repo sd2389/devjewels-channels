@@ -23,7 +23,8 @@
     "selfcheck:job-details": "npx --yes tsx src/jobDetails.selfcheck.ts",
     "selfcheck:oauth": "npx --yes tsx src/oauth.selfcheck.ts",
     "selfcheck:invite": "npx --yes tsx src/shopifyInvite.selfcheck.ts",
-    "selfcheck:merchant-catalog": "npx --yes tsx src/merchantOwnedCatalog.selfcheck.ts"
+    "selfcheck:merchant-catalog": "npx --yes tsx src/merchantOwnedCatalog.selfcheck.ts",
+    "selfcheck:metafield-definitions": "npx --yes tsx src/metafieldDefinitions.selfcheck.ts"
   },
   "dependencies": {
     "@devjewels-channels/core": "*"

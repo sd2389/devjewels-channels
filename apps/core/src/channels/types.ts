@@ -183,6 +183,16 @@ export interface CommerceChannel {
 
   /** Parse verified payload into a normalized order for Django reserve. */
   handleOrder(payload: unknown, connectionId: string): Promise<NormalizedChannelOrder>;
+
+  /**
+   * One-time, idempotent store setup so the channel can display what we sync
+   * (Shopify: variant metafield definitions with storefront access).
+   * Best effort — never throws, never blocks a connect or an import.
+   */
+  ensureChannelMetadata?(input: {
+    connectionId: string;
+    credentialsSecretRef?: string;
+  }): Promise<void>;
 }
 
 export class NotImplementedError extends Error {

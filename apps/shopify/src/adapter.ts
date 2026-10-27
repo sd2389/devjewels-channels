@@ -21,6 +21,7 @@ import {
   setShopifyInventoryCost,
   setShopifyInventoryLevel,
 } from "./inventory";
+import { ensureShopifyVariantMetafieldDefinitions } from "./metafieldDefinitions";
 import { getShopifyMetaStore } from "./meta";
 import {
   createShopifyProduct,
@@ -40,6 +41,34 @@ export { ShopifyRateLimitError, ShopifyHttpError } from "./client";
  */
 export const shopifyAdapter: CommerceChannel = {
   platform: "SHOPIFY",
+
+  async ensureChannelMetadata(input: {
+    connectionId: string;
+    credentialsSecretRef?: string;
+  }): Promise<void> {
+    const secretRef = input.credentialsSecretRef?.trim();
+    if (!secretRef) return;
+    try {
+      const meta = getShopifyMetaStore();
+      const shop = await meta.getShop(input.connectionId);
+      const credentials = await resolveShopifyCredentials(
+        secretRef,
+        shop?.shop_domain,
+      );
+      await ensureShopifyVariantMetafieldDefinitions(
+        createShopifyClient({
+          shopDomain: credentials.shopDomain,
+          accessToken: credentials.accessToken,
+        }),
+      );
+    } catch (err) {
+      // Stock sync matters more than the display fields: log and carry on.
+      console.warn("shopify_metafield_definitions_skipped", {
+        connectionId: input.connectionId,
+        error: safeErrorMessage(err),
+      });
+    }
+  },
 
   async createProduct(input: CreateProductInput): Promise<CreateProductResult> {
     const secretRef = input.credentialsSecretRef?.trim();

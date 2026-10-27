@@ -2,6 +2,8 @@ export { shopifyAdapter, shopifyChannel } from "./adapter";
 export { createShopifyClient, ShopifyHttpError, ShopifyRateLimitError } from "./client";
 export type { ShopifyClientConfig, ShopifyAdminClient } from "./client";
 export { setShopifyInventoryLevel } from "./inventory";
+export { ensureShopifyVariantMetafieldDefinitions } from "./metafieldDefinitions";
+export type { EnsureMetafieldDefinitionsResult } from "./metafieldDefinitions";
 export { createShopifyProduct } from "./products";
 export { normalizeShopifyOrder } from "./orders";
 export {
