@@ -679,6 +679,42 @@ async function main(): Promise<void> {
     on.calls.map((c) => c.op).join(", "),
   );
 
+  console.log("content sync on: many pieces collapse to one");
+
+  // storefrontOptionPlan returns null for a single piece, but the product still
+  // carries the Metal option from when it had several. Creating without a value
+  // for it fails with NEED_TO_ADD_OPTION_VALUES, aborting before the sold
+  // pieces are removed.
+  const collapsing = merchantProduct();
+  await updateShopifyProduct(
+    collapsing.client,
+    updateInput({
+      syncProductContent: true,
+      variants: [
+        job("DE-093_B9.00", { details: { metal: "Gold", purity: "18K", color: "Y" } }),
+      ],
+      existingVariants: [],
+      removeVariants: [
+        { jobNo: "DE-093_B2.00", externalVariantId: "gid://shopify/ProductVariant/100" },
+        { jobNo: "DE-093_B3.00", externalVariantId: "gid://shopify/ProductVariant/200" },
+      ],
+    }) as never,
+  );
+  const collapseCreate = collapsing.calls.find(
+    (c) => c.op === "productVariantsBulkCreate",
+  );
+  const collapseValues = (
+    (collapseCreate?.variables.variants ?? []) as Array<{
+      optionValues?: Array<{ optionName: string; name: string }>;
+    }>
+  )[0]?.optionValues;
+  check(
+    "the replacement fills the option the product still has",
+    JSON.stringify(collapseValues) ===
+      JSON.stringify([{ optionName: "Metal", name: "18K Yellow Gold" }]),
+    JSON.stringify(collapseValues),
+  );
+
   console.log("reclaim: an unmapped design that already exists in Shopify");
 
   const reclaimSeed = fakeClient({

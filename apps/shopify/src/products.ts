@@ -1640,21 +1640,39 @@ export async function updateShopifyProduct(
   }
 
   if (toCreate.length > 0) {
+    // Dropping to a single piece (or to the out-of-stock placeholder) makes
+    // storefrontOptionPlan return null, but the product still carries the Metal
+    // or Job option from when it had several. Creating a variant with no value
+    // for it fails with NEED_TO_ADD_OPTION_VALUES, and hideSinglePieceOption
+    // only runs after the deletes, so the sync would abort before the sold
+    // pieces were removed. Fill the option that is actually there; it is
+    // collapsed below once the replacement is the only one left.
+    const survivingOption = plan
+      ? null
+      : live.options.find((o) => isOwnedOption(o.name))?.name;
+    const createOption = (v: CreateProductInput["variants"][number]) => {
+      if (plan) {
+        return {
+          name: plan.optionName,
+          value: plan.byJob.get(v.jobNo.trim()) || v.jobNo.trim(),
+        };
+      }
+      if (!survivingOption) return undefined;
+      return {
+        name: survivingOption,
+        value: clipOptionValue(
+          isLegacyJobOption(survivingOption)
+            ? v.jobNo.trim()
+            : storefrontMetalLabel(v.details) || v.jobNo.trim(),
+        ),
+      };
+    };
     const bulk = await client.graphql<BulkVariantData>(PRODUCT_VARIANTS_BULK_CREATE, {
       productId,
       // Orphan reclaim (no mapped variants yet) must drop Shopify's default variant.
       ...(toUpdate.length === 0 ? { strategy: "REMOVE_STANDALONE_VARIANT" } : {}),
       variants: toCreate.map((v) =>
-        bulkVariantInput(
-          input.designNo,
-          v,
-          plan
-            ? {
-                name: plan.optionName,
-                value: plan.byJob.get(v.jobNo.trim()) || v.jobNo.trim(),
-              }
-            : undefined,
-        ),
+        bulkVariantInput(input.designNo, v, createOption(v)),
       ),
     });
     throwGraphqlErrors(bulk.errors);
