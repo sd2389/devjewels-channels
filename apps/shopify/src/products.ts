@@ -576,11 +576,9 @@ const PRODUCT_LIVE_STATE = /* GraphQL */ `
       options {
         id
         name
-        optionValues(first: ${LIVE_VARIANT_PAGE}) {
-          nodes {
-            id
-            name
-          }
+        optionValues {
+          id
+          name
         }
       }
       variants(first: ${LIVE_VARIANT_PAGE}) {
@@ -626,9 +624,7 @@ type ProductLiveStateData = {
     options?: Array<{
       id?: string | null;
       name?: string | null;
-      optionValues?: {
-        nodes?: Array<{ id?: string | null; name?: string | null } | null> | null;
-      } | null;
+      optionValues?: Array<{ id?: string | null; name?: string | null } | null> | null;
     } | null> | null;
     variants?: {
       nodes?: Array<{
@@ -733,7 +729,7 @@ export async function readShopifyLiveProduct(
     const name = String(o?.name || "").trim();
     if (!name) continue;
     const values: LiveOptionValue[] = [];
-    for (const v of o?.optionValues?.nodes ?? []) {
+    for (const v of o?.optionValues ?? []) {
       const valueName = String(v?.name || "").trim();
       if (!valueName) continue;
       values.push({ id: v?.id || undefined, name: valueName });
@@ -1199,6 +1195,70 @@ export function newVariantOptionValues(
   return out;
 }
 
+/** The option-value combination as Shopify checks it for uniqueness. */
+function optionTupleKey(values: Array<{ optionName: string; name: string }>): string {
+  return values
+    .map((v) => `${v.optionName.trim().toLowerCase()}=${v.name.trim().toLowerCase()}`)
+    .sort()
+    .join("|");
+}
+
+/** Combinations already on the product — a new piece must not repeat one. */
+function takenOptionTuples(live: LiveProductState): Set<string> {
+  const named = new Set(
+    live.options
+      .filter((o) => o.name && o.name !== DEFAULT_OPTION)
+      .map((o) => o.name),
+  );
+  const taken = new Set<string>();
+  for (const variant of live.variants) {
+    const values = variant.selectedOptions
+      .filter((o) => named.has(o.name))
+      .map((o) => ({ optionName: o.name, name: o.value }));
+    if (values.length) taken.add(optionTupleKey(values));
+  }
+  return taken;
+}
+
+/**
+ * A design regularly holds several pieces in the same metal, karat and colour,
+ * and two variants cannot share an option combination — Shopify rejects the
+ * whole bulk create, which would block the newly stocked piece and every
+ * removal behind it. Fall back to size, then the job number, the same ladder
+ * `storefrontOptionPlan` uses when it builds a product from scratch.
+ *
+ * `taken` is updated in place so one batch cannot collide with itself.
+ * Returns null when the clash cannot be broken without inventing a value.
+ */
+export function uniqueOptionValues(
+  values: Array<{ optionName: string; name: string }>,
+  job: { jobNo: string; details?: ChannelJobVariantDetails },
+  taken: Set<string>,
+): Array<{ optionName: string; name: string }> | null {
+  const owned = values.findIndex((v) => isOwnedOption(v.optionName));
+  const attempts: Array<Array<{ optionName: string; name: string }>> = [values];
+  if (owned >= 0) {
+    const base = values[owned].name;
+    const size = displayToken(job.details?.size || "");
+    const jobNo = job.jobNo.trim();
+    for (const label of [size ? `${base} · ${size}` : "", `${base} · ${jobNo}`]) {
+      if (!label) continue;
+      attempts.push(
+        values.map((v, i) =>
+          i === owned ? { ...v, name: clipOptionValue(label) } : v,
+        ),
+      );
+    }
+  }
+  for (const attempt of attempts) {
+    const key = optionTupleKey(attempt);
+    if (taken.has(key)) continue;
+    taken.add(key);
+    return attempt;
+  }
+  return null;
+}
+
 /** Merchant's price for this design, so a new piece does not land at 0.00. */
 function inheritedPrice(live: LiveVariant[], fallback: number): string {
   for (const v of live) {
@@ -1350,10 +1410,15 @@ export async function syncShopifyLiveStockVariants(
       optionValues: Array<{ optionName: string; name: string }>;
     }> = [];
     const unfillable: string[] = [];
+    // Seeded from what is on the product, then grown as the batch is built, so
+    // a new piece collides neither with an existing variant nor with a sibling
+    // added in the same run.
+    const taken = takenOptionTuples(live);
     for (const jobNo of plan.create) {
       const job = byJob.get(jobKey(jobNo));
       if (!job) continue;
-      const optionValues = newVariantOptionValues(live, job);
+      const wanted = newVariantOptionValues(live, job);
+      const optionValues = wanted && uniqueOptionValues(wanted, job, taken);
       if (!optionValues) {
         unfillable.push(jobNo);
         continue;
@@ -1361,8 +1426,8 @@ export async function syncShopifyLiveStockVariants(
       creatable.push({ job, optionValues });
     }
     if (unfillable.length) {
-      // Loud, not silent: the merchant changed the option structure to
-      // something job data cannot fill, so these pieces need a human.
+      // Loud, not silent: the merchant's option structure cannot be filled from
+      // job data, or the clash cannot be broken. These pieces need a human.
       console.warn("shopify_live_stock_variant_options_unfillable", {
         connectionId: input.connectionId,
         designNo: input.designNo,

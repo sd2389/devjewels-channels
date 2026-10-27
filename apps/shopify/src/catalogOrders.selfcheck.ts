@@ -399,9 +399,10 @@ async function storefrontMetalUpdateSelfcheck(): Promise<void> {
                   {
                     id: "gid://shopify/ProductOption/80",
                     name: "Job",
-                    optionValues: {
-                      nodes: [{ id: "gid://shopify/ProductOptionValue/80", name: "31147" }],
-                    },
+                    // ProductOption.optionValues is a plain list in the schema.
+                    optionValues: [
+                      { id: "gid://shopify/ProductOptionValue/80", name: "31147" },
+                    ],
                   },
                 ],
                 variants: {

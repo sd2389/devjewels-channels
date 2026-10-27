@@ -19,11 +19,12 @@ import {
   VARIANT_METAFIELD_TYPE,
 } from "./variantMetafieldSchema";
 
-/** Readable in a theme; the merchant sees it in admin but DevJewels owns it. */
-const DEFINITION_ACCESS = {
-  admin: "MERCHANT_READ",
-  storefront: "PUBLIC_READ",
-} as const;
+/**
+ * Readable in a theme. `devjewels` is a plain namespace, not an app-reserved
+ * `$app:` one, so the definitions are merchant-owned and Shopify rejects an
+ * `access.admin` on them — storefront access is the only setting to send.
+ */
+const DEFINITION_ACCESS = { storefront: "PUBLIC_READ" } as const;
 
 const METAFIELD_DEFINITION_CREATE = /* GraphQL */ `
   mutation metafieldDefinitionCreate($definition: MetafieldDefinitionInput!) {

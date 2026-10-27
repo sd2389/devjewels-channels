@@ -217,6 +217,20 @@ function installShopifyFetch(calls: string[]): typeof fetch {
       );
     }
     if (
+      body.includes("inventorySetQuantities") ||
+      body.includes("inventoryItemUpdate")
+    ) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            inventorySetQuantities: { userErrors: [] },
+            inventoryItemUpdate: { userErrors: [] },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    if (
       body.includes("productsFindByDesign") ||
       (body.includes("products(first:") && body.includes("metafield"))
     ) {
@@ -383,7 +397,16 @@ async function main(): Promise<void> {
         { connection_id: CONN_A2, shop_domain: "product-sync-a2.myshopify.com" },
         { connection_id: CONN_B, shop_domain: "product-sync-b.myshopify.com" },
       ],
-      locations: [],
+      // A primary location is needed for any inventory write to reach Shopify,
+      // including the zeroing that takes a revoked design off sale.
+      locations: [
+        {
+          connection_id: CONN_A,
+          external_location_id: "gid://shopify/Location/1",
+          name: "Primary",
+          is_primary: true,
+        },
+      ],
     }),
   );
   resetAdaptersForTests();
@@ -834,6 +857,24 @@ async function main(): Promise<void> {
     }
     if (!(await productMaps.getByDesign(CONN_B, "PS-B1"))) {
       throw new Error("customer B must be untouched by A's key_revoked");
+    }
+    // key_revoked turns every sync flag off before it fans out the de-listing
+    // jobs. If the inventory gate honoured sync_inventory here, the zeroing
+    // would be skipped and revoked stock would stay buyable.
+    const callsBeforeZero = calls.length;
+    const zeroed = await runInventorySyncJob(keyZeroJobs[0]!);
+    if (zeroed !== "SUCCESS") {
+      throw new Error(
+        `revoked zeroing must run with sync flags off, got ${zeroed} ` +
+        `(${syncLogs.rows.at(-1)?.message})`,
+      );
+    }
+    if (
+      !calls
+        .slice(callsBeforeZero)
+        .some((c) => c.includes("inventorySetQuantities") && c.includes('"quantity":0'))
+    ) {
+      throw new Error("revoked zeroing must write quantity 0 to Shopify");
     }
     const disabled = await getConnectionById(CONN_A);
     const disabledA2 = await getConnectionById(CONN_A2);

@@ -71,7 +71,14 @@ export async function runInventorySyncJob(
     return "FAILED";
   }
 
-  if (!connection.is_active || !connection.sync_inventory) {
+  // Taking a revoked design off sale is the one write that must survive the
+  // sync gates. key_revoked turns every sync flag off before it fans out the
+  // de-listing jobs, and the design is gone from the feed by definition, so
+  // honouring either gate here would leave sold-out pieces buyable. It only
+  // ever writes zero, so it cannot push stock to a shop that opted out.
+  const revoking = job.reason === "revoked";
+
+  if (!connection.is_active || (!connection.sync_inventory && !revoking)) {
     await writeSyncLog({
       connectionId: job.connectionId,
       platform: job.platform,
@@ -84,10 +91,6 @@ export async function runInventorySyncJob(
     return "SKIPPED";
   }
 
-  // Taking a revoked design off sale is the one write that must survive the
-  // entitlement gate — the design is gone from the feed by definition, and
-  // skipping here would leave a sold-out piece buyable on the storefront.
-  const revoking = job.reason === "revoked";
   const { requireSyncableEntitlements, designInFeed } = await import(
     "@/services/entitlements"
   );

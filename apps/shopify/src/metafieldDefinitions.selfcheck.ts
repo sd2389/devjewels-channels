@@ -112,8 +112,12 @@ async function main(): Promise<void> {
   );
   check(
     "readable by the storefront — the whole point",
-    JSON.stringify(firstDef?.access) ===
-      JSON.stringify({ admin: "MERCHANT_READ", storefront: "PUBLIC_READ" }),
+    JSON.stringify(firstDef?.access) === JSON.stringify({ storefront: "PUBLIC_READ" }),
+    JSON.stringify(firstDef?.access),
+  );
+  check(
+    "no admin access on a merchant-owned namespace, which Shopify rejects",
+    !("admin" in ((firstDef?.access ?? {}) as Record<string, unknown>)),
     JSON.stringify(firstDef?.access),
   );
   check(
@@ -156,7 +160,7 @@ async function main(): Promise<void> {
         c.op === "metafieldDefinitionUpdate" &&
         JSON.stringify(
           (c.variables.definition as Record<string, unknown>)?.access,
-        ) === JSON.stringify({ admin: "MERCHANT_READ", storefront: "PUBLIC_READ" }),
+        ) === JSON.stringify({ storefront: "PUBLIC_READ" }),
     ),
   );
 

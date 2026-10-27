@@ -45,7 +45,7 @@ type LiveVariantSeed = {
   options: Array<{ name: string; value: string }>;
 };
 
-type Recorded = { op: string; variables: Record<string, unknown> };
+type Recorded = { op: string; query: string; variables: Record<string, unknown> };
 
 function operationName(query: string): string {
   return /mutation\s+(\w+)|query\s+(\w+)/.exec(query)?.slice(1).find(Boolean) ?? "unknown";
@@ -62,7 +62,7 @@ function fakeClient(seed: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     graphql: (async (query: string, variables?: Record<string, unknown>) => {
       const op = operationName(query);
-      calls.push({ op, variables: variables ?? {} });
+      calls.push({ op, query, variables: variables ?? {} });
       switch (op) {
         case "productLiveState":
           return {
@@ -72,12 +72,12 @@ function fakeClient(seed: {
                 options: seed.options.map((o, i) => ({
                   id: `gid://shopify/ProductOption/${i}`,
                   name: o.name,
-                  optionValues: {
-                    nodes: o.values.map((v, j) => ({
-                      id: `gid://shopify/ProductOptionValue/${i}-${j}`,
-                      name: v,
-                    })),
-                  },
+                  // ProductOption.optionValues is [ProductOptionValue!]! —
+                  // a plain list, not a paginated connection.
+                  optionValues: o.values.map((v, j) => ({
+                    id: `gid://shopify/ProductOptionValue/${i}-${j}`,
+                    name: v,
+                  })),
                 })),
                 variants: {
                   nodes: seed.variants.map((v) => ({
@@ -446,6 +446,73 @@ async function main(): Promise<void> {
     "the second piece lands under a metal label",
     grewVariants[0]?.optionValues?.[0]?.name === "18K Rose Gold",
     JSON.stringify(grewVariants),
+  );
+
+  const liveStateQuery = off.calls.find((c) => c.op === "productLiveState")?.query ?? "";
+  check(
+    "optionValues is read as a list, not a connection",
+    liveStateQuery.includes("optionValues {") &&
+      !/optionValues\s*\(/.test(liveStateQuery),
+    liveStateQuery.slice(0, 200),
+  );
+
+  console.log("two pieces, same metal");
+
+  // A design regularly holds several pieces in the same metal, karat and
+  // colour. Two variants cannot share an option combination, so the new piece
+  // has to be given a label of its own or Shopify rejects the whole batch.
+  const sameMetal = fakeClient({
+    options: [{ name: "Metal", values: ["14K White Gold"] }],
+    variants: [
+      {
+        id: "gid://shopify/ProductVariant/400",
+        sku: "DE-093_B2.00",
+        price: "1400.00",
+        options: [{ name: "Metal", value: "14K White Gold" }],
+      },
+    ],
+  });
+  const twin = { metal: "Gold", purity: "14K", color: "W" };
+  await updateShopifyProduct(
+    sameMetal.client,
+    updateInput({
+      variants: [
+        job("DE-093_B2.00", { details: twin }),
+        job("DE-093_B5.00", { details: twin }),
+        job("DE-093_B6.00", { details: { ...twin, size: "6.5" } }),
+      ],
+      existingVariants: [
+        { jobNo: "DE-093_B2.00", externalVariantId: "gid://shopify/ProductVariant/400" },
+      ],
+    }) as never,
+  );
+  const twinCreate = sameMetal.calls.find(
+    (c) => c.op === "productVariantsBulkCreate",
+  );
+  const twinValues = (
+    (twinCreate?.variables.variants ?? []) as Array<{
+      optionValues?: Array<{ name: string }>;
+    }>
+  ).map((v) => v.optionValues?.[0]?.name);
+  check(
+    "both new pieces are added",
+    twinValues.length === 2,
+    JSON.stringify(twinValues),
+  );
+  check(
+    "neither repeats the label already on the product",
+    twinValues.every((v) => v !== "14K White Gold"),
+    JSON.stringify(twinValues),
+  );
+  check(
+    "and they do not collide with each other",
+    new Set(twinValues).size === twinValues.length,
+    JSON.stringify(twinValues),
+  );
+  check(
+    "size breaks the tie before the job number does",
+    twinValues.includes("14K White Gold · 6.5"),
+    JSON.stringify(twinValues),
   );
 
   console.log("update: content sync on (merchant opted in)");
