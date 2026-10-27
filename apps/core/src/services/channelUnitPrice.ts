@@ -4,7 +4,7 @@
  *
  * Formula: funnel final_price → design override if present else connection overall → Shopify.
  */
-import { deverpClient } from "@/integrations/deverp/client";
+import { storeApiClient } from "@/integrations/storeApi/client";
 import {
   applyConnectionMarkup,
   pickChannelMarkup,
@@ -46,7 +46,7 @@ export async function resolveChannelVariantPrice(
 
   if (input.customerId != null) {
     try {
-      const priced = await deverpClient.getPrice({
+      const priced = await storeApiClient.getPrice({
         customerId: input.customerId,
         designNo: input.designNo,
         jobNo: input.jobNo === input.designNo ? undefined : input.jobNo,

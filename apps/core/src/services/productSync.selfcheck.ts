@@ -26,7 +26,7 @@ import {
   createMemoryVariantMappingStore,
   setVariantMappingStoreForTests,
 } from "./variantMappings";
-import { setDeverpClientForTests, type DeverpClient } from "../integrations/deverp/client";
+import { setStoreApiClientForTests, type StoreApiClient } from "../integrations/storeApi/client";
 import { runProductSyncJob } from "./productSyncService";
 import { runInventorySyncJob } from "./inventorySyncService";
 import { fanOutEntitlementChanged } from "./entitlementFanOut";
@@ -106,7 +106,7 @@ type EntState = {
   canPlaceOrders: boolean;
 };
 
-function mockDeverp(state: EntState): DeverpClient {
+function mockStoreApi(state: EntState): StoreApiClient {
   return {
     async listCatalogDesigns() {
       throw new Error("unused");
@@ -375,7 +375,7 @@ async function main(): Promise<void> {
   setSyncLogStoreForTests(syncLogs);
   setConnectionDesignMarkupStoreForTests(createMemoryConnectionDesignMarkupStore());
   setConnectionStoreForTests(connections);
-  setDeverpClientForTests(mockDeverp(entState));
+  setStoreApiClientForTests(mockStoreApi(entState));
   setShopifyMetaStoreForTests(
     createMemoryShopifyMetaStore({
       shops: [
@@ -1005,7 +1005,7 @@ async function main(): Promise<void> {
     setVariantMappingStoreForTests(null);
     setSyncLogStoreForTests(null);
     setConnectionDesignMarkupStoreForTests(null);
-    setDeverpClientForTests(null);
+    setStoreApiClientForTests(null);
     setShopifyMetaStoreForTests(null);
     resetAdaptersForTests();
     resetAdaptersReadyForTests();

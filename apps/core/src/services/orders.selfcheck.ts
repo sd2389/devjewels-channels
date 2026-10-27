@@ -23,13 +23,13 @@ import {
   setWebhookEventStoreForTests,
 } from "./webhookEvents";
 import {
-  DeverpHttpError,
-  setDeverpClientForTests,
-  type DeverpClient,
-  type DeverpEntitlements,
-  type DeverpReserveOrderPayload,
-  type DeverpReserveOrderResult,
-} from "../integrations/deverp/client";
+  StoreApiHttpError,
+  setStoreApiClientForTests,
+  type StoreApiClient,
+  type StoreApiEntitlements,
+  type StoreApiReserveOrderPayload,
+  type StoreApiReserveOrderResult,
+} from "../integrations/storeApi/client";
 import { clearEntitlementCache } from "./entitlements";
 import { runOrderProcessingJob } from "./orderProcessingService";
 import { drainMemoryOrderQueue, enqueueOrderProcessing } from "./queue";
@@ -52,10 +52,10 @@ function hmac(raw: string): string {
 }
 
 function baseEntitlements(
-  overrides: Partial<DeverpEntitlements> & {
-    permissions?: Partial<DeverpEntitlements["permissions"]>;
+  overrides: Partial<StoreApiEntitlements> & {
+    permissions?: Partial<StoreApiEntitlements["permissions"]>;
   } = {},
-): DeverpEntitlements {
+): StoreApiEntitlements {
   return {
     customer_id: 55,
     key_present: overrides.key_present ?? true,
@@ -74,10 +74,10 @@ function baseEntitlements(
 }
 
 function unusedClient(
-  overrides: Partial<DeverpClient> & {
-    reserveOrder?: (payload: DeverpReserveOrderPayload) => Promise<DeverpReserveOrderResult>;
+  overrides: Partial<StoreApiClient> & {
+    reserveOrder?: (payload: StoreApiReserveOrderPayload) => Promise<StoreApiReserveOrderResult>;
   },
-): DeverpClient {
+): StoreApiClient {
   return {
     async listCatalogDesigns() {
       throw new Error("unused");
@@ -255,7 +255,7 @@ async function main(): Promise<void> {
   // 5) can_place_orders=false → SKIPPED, reserve never called
   clearEntitlementCache();
   let reserveCalls = 0;
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async getEntitlements() {
         return baseEntitlements({ permissions: { can_place_orders: false } });
@@ -289,7 +289,7 @@ async function main(): Promise<void> {
     payloadRef: rawBody,
   });
   reserveCalls = 0;
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async getEntitlements() {
         return baseEntitlements({
@@ -361,10 +361,10 @@ async function main(): Promise<void> {
     topic: "orders/create",
     payloadRef: rawBody,
   });
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async reserveOrder() {
-        throw new DeverpHttpError(
+        throw new StoreApiHttpError(
           409,
           `One or more items are no longer available. token=${SHPAT}`,
           {
@@ -397,10 +397,10 @@ async function main(): Promise<void> {
     topic: "orders/create",
     payloadRef: rawBody,
   });
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async reserveOrder() {
-        throw new DeverpHttpError(
+        throw new StoreApiHttpError(
           400,
           "Design DJ-ORD is not entitled for this customer.",
           { success: false },
@@ -428,7 +428,7 @@ async function main(): Promise<void> {
     topic: "orders/create",
     payloadRef: rawBody,
   });
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async getEntitlements() {
         return baseEntitlements({ permissions: { can_place_orders: true } });
@@ -502,7 +502,7 @@ async function main(): Promise<void> {
     payloadRef: JSON.stringify(mappedPayload),
   });
   let reservedDesign = "";
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async getEntitlements() {
         return baseEntitlements({ permissions: { can_place_orders: true } });
@@ -540,7 +540,7 @@ async function main(): Promise<void> {
   setConnectionStoreForTests(null);
   setWebhookEventStoreForTests(null);
   setSyncLogStoreForTests(null);
-  setDeverpClientForTests(null);
+  setStoreApiClientForTests(null);
   setShopifyMetaStoreForTests(null);
   resetAdaptersForTests();
   resetAdaptersReadyForTests();

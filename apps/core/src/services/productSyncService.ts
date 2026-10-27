@@ -11,7 +11,7 @@ import {
   NotImplementedError,
 } from "@/channels/types";
 import { getConnectionById } from "@/services/connections";
-import { deverpClient } from "@/integrations/deverp/client";
+import { storeApiClient } from "@/integrations/storeApi/client";
 import {
   designInFeed,
   requireSyncableEntitlements,
@@ -275,7 +275,7 @@ export async function runProductSyncJob(
   let category = "";
   let stoneWt = "";
   try {
-    const product = await deverpClient.getProduct(designNo, connection.customer_id!);
+    const product = await storeApiClient.getProduct(designNo, connection.customer_id!);
     title = String(product.titleline || designNo).trim() || designNo;
     defaultPrice = parsePrice(product.totamt);
     imageUrls = resolveDesignImageUrls({
@@ -311,7 +311,7 @@ export async function runProductSyncJob(
   const canViewPrices = entitlements.permissions.can_view_prices;
 
   const inventory = canViewInventory
-    ? await deverpClient.getInventory(designNo)
+    ? await storeApiClient.getInventory(designNo)
     : { jobs: [] as Array<{ job_no?: string; totamt?: string | number }> };
   // Live jobs only; OOS → single design_no placeholder. Dedupes upstream duplicates.
   const resolved = resolveChannelInventoryJobs(

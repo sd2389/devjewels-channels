@@ -14,7 +14,7 @@ import {
   getCatalogImportStore,
   type CatalogImportRow,
 } from "@/services/catalogImportStore";
-import { deverpClient } from "@/integrations/deverp/client";
+import { storeApiClient } from "@/integrations/storeApi/client";
 import { resolveChannelVariantPrice } from "@/services/channelUnitPrice";
 import {
   loadDesignMarkupMap,
@@ -114,7 +114,7 @@ async function collectEligibleDesigns(
   }> = [];
   let afterId: number | null = null;
   while (out.length < maxDesigns) {
-    const page = await deverpClient.listCatalogDesigns({
+    const page = await storeApiClient.listCatalogDesigns({
       customerId,
       limit: Math.min(pageSize, maxDesigns - out.length),
       afterId,
@@ -176,7 +176,7 @@ async function importOneDesign(input: {
   tags: string[];
   stoneWt?: string;
 }): Promise<"ok" | "skipped" | "failed"> {
-  const inventory = await deverpClient.getInventory(input.designNo);
+  const inventory = await storeApiClient.getInventory(input.designNo);
   // Live jobs only; OOS → design_no placeholder. Drops leftover placeholders on re-sync.
   const resolved = resolveChannelInventoryJobs(
     input.designNo,

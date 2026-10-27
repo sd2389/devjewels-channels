@@ -19,7 +19,7 @@
     "selfcheck:product-sync": "npx --yes tsx src/services/productSync.selfcheck.ts",
     "selfcheck:orders": "npx --yes tsx src/services/orders.selfcheck.ts",
     "selfcheck:connect": "npx --yes tsx src/services/connect.selfcheck.ts",
-    "selfcheck:customers": "npx --yes tsx src/integrations/deverp.customers.selfcheck.ts",
+    "selfcheck:customers": "npx --yes tsx src/integrations/storeApi.customers.selfcheck.ts",
     "selfcheck:vault": "npx --yes tsx src/security/vault.selfcheck.ts",
     "selfcheck:shopify-auth-route": "npx --yes tsx src/app/api/shopify/auth/route.selfcheck.ts",
     "selfcheck:shopify-connect": "npx --yes tsx src/http/routes/shopifyConnect.selfcheck.ts",

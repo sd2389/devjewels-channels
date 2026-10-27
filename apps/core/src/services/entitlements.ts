@@ -2,7 +2,7 @@
  * Customer entitlement client — Django channels_api is SoT.
  * Channels never stores a design allowlist; it always asks Django.
  */
-import { DeverpHttpError, deverpClient } from "@/integrations/deverp/client";
+import { StoreApiHttpError, storeApiClient } from "@/integrations/storeApi/client";
 
 export type ChannelPermissions = {
   can_view_designs: boolean;
@@ -48,7 +48,7 @@ export async function fetchCustomerEntitlements(
   if (!options.fresh && cached && Date.now() - cached.at < CACHE_TTL_MS) {
     return cached.value;
   }
-  const value = await deverpClient.getEntitlements(customerId);
+  const value = await storeApiClient.getEntitlements(customerId);
   cache.set(customerId, { at: Date.now(), value });
   return value;
 }
@@ -79,7 +79,7 @@ export async function requireSyncableEntitlements(
     }
     return ent;
   } catch (err) {
-    if (err instanceof DeverpHttpError && err.status === 404) {
+    if (err instanceof StoreApiHttpError && err.status === 404) {
       return null;
     }
     throw err;
@@ -103,7 +103,7 @@ export async function filterEntitledCustomerIds(input: {
   requirePermission?: keyof ChannelPermissions;
 }): Promise<Array<{ customer_id: number; permissions: ChannelPermissions }>> {
   if (input.customerIds.length === 0) return [];
-  const result = await deverpClient.checkEntitlements({
+  const result = await storeApiClient.checkEntitlements({
     designNo: input.designNo,
     customerIds: input.customerIds,
     requirePermission: input.requirePermission ?? "can_view_designs",

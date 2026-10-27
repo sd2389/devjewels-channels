@@ -11,7 +11,7 @@ import {
   parseShopifyOAuthAppCredentials,
   saveShopifyOAuthAppCredentials,
 } from "@devjewels-channels/shopify/auth";
-import { listChannelsCustomers } from "@/integrations/deverp/client";
+import { listChannelsCustomers } from "@/integrations/storeApi/client";
 import {
   listDesignMarkups,
   replaceDesignMarkups,
