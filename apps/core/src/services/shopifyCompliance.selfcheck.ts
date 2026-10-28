@@ -50,6 +50,7 @@ async function main() {
         sync_price: false,
         sync_orders: false,
         sync_products: true,
+        sync_product_content: false,
       },
     ]),
   );

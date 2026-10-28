@@ -23,6 +23,7 @@ type ConnectionSummary = {
   markup_value?: number;
   sync_inventory: boolean;
   sync_products?: boolean;
+  sync_product_content?: boolean;
   shop_domain: string | null;
   locations: LocationRow[];
   primary_location_id: string | null;
@@ -1075,7 +1076,11 @@ export function ConnectDashboard() {
                   {c.customer_id != null ? ` · customer ${c.customer_id}` : ""}
                   {c.shop_domain ? ` (${c.shop_domain})` : ""}
                   {c.sync_inventory ? " · inventory on" : ""}
-                  {c.sync_products ? " · catalog on" : ""}
+                  {c.sync_products
+                    ? c.sync_product_content
+                      ? " · catalog on (DevJewels owns content)"
+                      : " · catalog on (live stock only)"
+                    : ""}
                 </option>
               ))}
             </select>

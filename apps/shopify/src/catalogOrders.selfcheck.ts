@@ -81,7 +81,7 @@ async function main(): Promise<void> {
             data: {
               product: {
                 id: orphan ? "gid://shopify/Product/orphan" : "gid://shopify/Product/9",
-                options: [{ name: "Job" }],
+                options: [{ id: "gid://shopify/ProductOption/1", name: "Job" }],
                 variants: {
                   nodes: [
                     {
@@ -93,6 +93,17 @@ async function main(): Promise<void> {
                   ],
                 },
               },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (body.includes("productOptionsDelete") || body.includes("productOptionUpdate")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              productOptionsDelete: { userErrors: [] },
+              productOptionUpdate: { userErrors: [] },
             },
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
@@ -181,8 +192,8 @@ async function main(): Promise<void> {
   if (calls.length !== 3) {
     throw new Error(`expected find+create+variant graphql calls, got ${calls.length}`);
   }
-  if (!calls[1]?.includes('"name":"Job"') && !calls[1]?.includes("Job")) {
-    throw new Error("single-variant create must still send a Job product option");
+  if (calls[1]?.includes('"name":"Job"') || calls[1]?.includes("productOptions")) {
+    throw new Error("single-variant create must leave the default variant so the picker stays hidden");
   }
   if (!calls[1]?.includes("dj_design:D1")) {
     throw new Error("create must attach design identity tag");
@@ -210,6 +221,8 @@ async function main(): Promise<void> {
   const { updateShopifyProduct } = await import("./products");
   const updated = await updateShopifyProduct(client, {
     connectionId: "c",
+    // This block covers the opt-in path where DevJewels owns the storefront copy.
+    syncProductContent: true,
     designNo: "D1",
     title: "D1 Updated",
     externalProductId: "gid://shopify/Product/9",
@@ -231,9 +244,14 @@ async function main(): Promise<void> {
   if (productUpdateCall.includes('"status"')) {
     throw new Error("product update must not change Shopify publish status");
   }
+  if (!calls.some((body) => body.includes("productOptionsDelete"))) {
+    throw new Error("one piece in stock must remove the Job option so the storefront hides the picker");
+  }
 
   const updatedNewJob = await updateShopifyProduct(client, {
     connectionId: "c",
+    // This block covers the opt-in path where DevJewels owns the storefront copy.
+    syncProductContent: true,
     designNo: "D1",
     title: "D1 Updated",
     externalProductId: "gid://shopify/Product/9",
@@ -260,8 +278,221 @@ async function main(): Promise<void> {
   }
 
   await merchantEditedProductSelfcheck(updateShopifyProduct);
+  await storefrontMetalCreateSelfcheck();
+  await storefrontMetalUpdateSelfcheck();
 
   console.log("shopify catalogOrders.selfcheck ok");
+}
+
+/**
+ * Two in-stock metals are the storefront picker. The job number stays on the SKU.
+ */
+async function storefrontMetalCreateSelfcheck(): Promise<void> {
+  const calls: string[] = [];
+  const client = createShopifyClient({
+    shopDomain: "metal.myshopify.com",
+    accessToken: "shpat_x",
+    fetchImpl: (async (_url, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      calls.push(body);
+      if (body.includes("productsFindByDesign") || body.includes("products(first:")) {
+        return new Response(JSON.stringify({ data: { products: { edges: [] } } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            productCreate: {
+              product: {
+                id: "gid://shopify/Product/70",
+                variants: {
+                  edges: [
+                    {
+                      node: {
+                        id: "gid://shopify/ProductVariant/70",
+                        sku: "31147",
+                        inventoryItem: { id: "gid://shopify/InventoryItem/70" },
+                      },
+                    },
+                  ],
+                },
+              },
+              userErrors: [],
+            },
+            productVariantsBulkCreate: {
+              productVariants: [
+                {
+                  id: "gid://shopify/ProductVariant/70",
+                  sku: "31147",
+                  inventoryItem: { id: "gid://shopify/InventoryItem/70" },
+                },
+                {
+                  id: "gid://shopify/ProductVariant/71",
+                  sku: "31148",
+                  inventoryItem: { id: "gid://shopify/InventoryItem/71" },
+                },
+              ],
+              userErrors: [],
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as typeof fetch,
+  });
+  await createShopifyProduct(client, {
+    connectionId: "c",
+    designNo: "DR-941_OVL_5.00",
+    title: "DR-941_OVL_5.00",
+    variants: [
+      {
+        jobNo: "31147",
+        price: 100,
+        quantity: 1,
+        details: { metal: "Gold", purity: "14K", color: "White" },
+      },
+      {
+        jobNo: "31148",
+        price: 110,
+        quantity: 1,
+        details: { metal: "Gold", purity: "18K", color: "Rose" },
+      },
+    ],
+  });
+  const created = calls.find((body) => body.includes("productCreate("));
+  if (!created?.includes('"name":"Metal"')) {
+    throw new Error("multi-piece create must send a Metal option");
+  }
+  if (!created.includes("14K White Gold") || !created.includes("18K Rose Gold")) {
+    throw new Error("multi-piece create must use metal and karat as option values");
+  }
+  if (created.includes('"name":"31147"') || created.includes('"name":"31148"')) {
+    throw new Error("job numbers must not be the storefront option values");
+  }
+  const variantsCall = calls.find((body) => body.includes("productVariantsBulkCreate"));
+  if (!variantsCall?.includes("14K White Gold") || !variantsCall.includes('"sku":"31147"')) {
+    throw new Error("variant write must label the option and keep the job number on the SKU");
+  }
+}
+
+/**
+ * A product already published with a Job option is rewritten on the next sync:
+ * the option becomes Metal and the value becomes 14K White Gold. The SKU stays the job number.
+ */
+async function storefrontMetalUpdateSelfcheck(): Promise<void> {
+  const calls: string[] = [];
+  const client = createShopifyClient({
+    shopDomain: "relabel.myshopify.com",
+    accessToken: "shpat_x",
+    fetchImpl: (async (_url, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      calls.push(body);
+      if (body.includes("productLiveState")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              product: {
+                id: "gid://shopify/Product/80",
+                options: [
+                  {
+                    id: "gid://shopify/ProductOption/80",
+                    name: "Job",
+                    // ProductOption.optionValues is a plain list in the schema.
+                    optionValues: [
+                      { id: "gid://shopify/ProductOptionValue/80", name: "31147" },
+                    ],
+                  },
+                ],
+                variants: {
+                  nodes: [
+                    {
+                      id: "gid://shopify/ProductVariant/80",
+                      sku: "31147",
+                      selectedOptions: [{ name: "Job", value: "31147" }],
+                      inventoryItem: { id: "gid://shopify/InventoryItem/80" },
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            productUpdate: { product: { id: "gid://shopify/Product/80" }, userErrors: [] },
+            productOptionUpdate: { userErrors: [] },
+            productVariantsBulkUpdate: {
+              productVariants: [
+                {
+                  id: "gid://shopify/ProductVariant/80",
+                  sku: "31147",
+                  inventoryItem: { id: "gid://shopify/InventoryItem/80" },
+                },
+              ],
+              userErrors: [],
+            },
+            productVariantsBulkCreate: {
+              productVariants: [
+                {
+                  id: "gid://shopify/ProductVariant/81",
+                  sku: "31148",
+                  inventoryItem: { id: "gid://shopify/InventoryItem/81" },
+                },
+              ],
+              userErrors: [],
+            },
+            productVariantsBulkDelete: { userErrors: [] },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as typeof fetch,
+  });
+  const { updateShopifyProduct } = await import("./products");
+  await updateShopifyProduct(client, {
+    connectionId: "c",
+    // This block covers the opt-in path where DevJewels owns the storefront copy.
+    syncProductContent: true,
+    designNo: "DR-941_OVL_5.00",
+    title: "DR-941_OVL_5.00",
+    externalProductId: "gid://shopify/Product/80",
+    variants: [
+      {
+        jobNo: "31147",
+        price: 100,
+        quantity: 1,
+        details: { metal: "Gold", purity: "14K", color: "White" },
+      },
+      {
+        jobNo: "31148",
+        price: 110,
+        quantity: 1,
+        details: { metal: "Rose Gold", purity: "18K", color: "Rose" },
+      },
+    ],
+  });
+  const relabel = calls.find((body) => body.includes("productOptionUpdate"));
+  if (!relabel?.includes('"name":"Metal"') || !relabel.includes("14K White Gold")) {
+    throw new Error("existing Job option must be renamed to Metal with the karat label");
+  }
+  const updatedPiece = calls.find(
+    (body) => body.includes("productVariantsBulkUpdate") && body.includes("31147"),
+  );
+  if (!updatedPiece?.includes("14K White Gold") || !updatedPiece.includes('"sku":"31147"')) {
+    throw new Error("updating a piece must rewrite the metal label and keep the job number as the SKU");
+  }
+  const created = calls.find((body) => body.includes("productVariantsBulkCreate"));
+  if (!created?.includes("18K Rose Gold") || !created.includes('"sku":"31148"')) {
+    throw new Error("new piece must be created under its metal label with the job SKU");
+  }
+  if (calls.some((body) => body.includes("productOptionsDelete"))) {
+    throw new Error("two pieces must keep the Metal picker");
+  }
 }
 
 /**
@@ -340,6 +571,8 @@ async function merchantEditedProductSelfcheck(
 
   const result = await updateShopifyProduct(client, {
     connectionId: "c",
+    // This block covers the opt-in path where DevJewels owns the storefront copy.
+    syncProductContent: true,
     designNo: "D50",
     title: "D50",
     externalProductId: "gid://shopify/Product/50",
@@ -366,7 +599,11 @@ async function merchantEditedProductSelfcheck(
     throw new Error(`J2 should be re-created: ${JSON.stringify(byJob)}`);
   }
 
-  // Merchant added their own options: do not guess, fail with an actionable message.
+  // Merchant added their own options.
+  // Content sync ON (DevJewels owns the copy): fail with an actionable message
+  // rather than guessing what the extra option should hold.
+  // Content sync OFF (the default): the merchant is allowed to restructure, so
+  // the sync must keep running and only report the pieces it cannot place.
   const custom = createShopifyClient({
     shopDomain: "custom.myshopify.com",
     accessToken: "shpat_x",
@@ -376,7 +613,7 @@ async function merchantEditedProductSelfcheck(
         return ok({
           product: {
             id: "gid://shopify/Product/51",
-            options: [{ name: "Metal" }],
+            options: [{ name: "Size" }],
             variants: { nodes: [{ id: "gid://shopify/ProductVariant/m1", sku: "" }] },
           },
         });
@@ -391,6 +628,7 @@ async function merchantEditedProductSelfcheck(
       designNo: "D51",
       title: "D51",
       externalProductId: "gid://shopify/Product/51",
+      syncProductContent: true,
       variants: [{ jobNo: "J9", price: 10, quantity: 1 }],
     });
   } catch (err) {
@@ -398,6 +636,24 @@ async function merchantEditedProductSelfcheck(
   }
   if (!message.includes("options were changed")) {
     throw new Error(`expected options-changed error, got: ${message || "no error"}`);
+  }
+
+  let merchantOwnedError = "";
+  try {
+    await updateShopifyProduct(custom, {
+      connectionId: "c",
+      designNo: "D51",
+      title: "D51",
+      externalProductId: "gid://shopify/Product/51",
+      variants: [{ jobNo: "J9", price: 10, quantity: 1 }],
+    });
+  } catch (err) {
+    merchantOwnedError = err instanceof Error ? err.message : String(err);
+  }
+  if (merchantOwnedError) {
+    throw new Error(
+      `a merchant-restructured product must not break the sync, got: ${merchantOwnedError}`,
+    );
   }
 }
 

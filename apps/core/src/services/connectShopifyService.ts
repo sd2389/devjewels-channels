@@ -19,6 +19,7 @@ import { writeVaultSecret } from "@/security/vault";
 import { optionalProcessEnv } from "@/config/serverEnv";
 import { resolveShopifyCredentials } from "@/security/secrets";
 import {
+  ensureShopifyVariantMetafieldDefinitions,
   fetchShopifyLocations,
   shopifyClientFromCreds,
   getShopifyMetaStore,
@@ -276,6 +277,21 @@ export async function connectShopifyStore(
     accessToken,
     skip: input.skipWebhookRegistration,
   });
+
+  // Declare the piece-detail fields so the merchant's theme can read them.
+  // Best effort: a shop that connects without write_metafield_definitions still
+  // syncs stock, the details just stay hidden until the scope is granted.
+  try {
+    await ensureShopifyVariantMetafieldDefinitions(
+      shopifyClientFromCreds({ shopDomain, accessToken }),
+    );
+  } catch (err) {
+    console.warn("shopify_metafield_definitions_failed", {
+      shopDomain,
+      connectionId: connection.id,
+      error: err instanceof Error ? err.message.slice(0, 200) : "unknown",
+    });
+  }
 
   // Never await catalog import on the HTTP path: API Gateway ~29s / Lambda 60s
   // time out (production 503 Service Unavailable on OAuth callback).

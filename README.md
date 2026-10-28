@@ -62,6 +62,86 @@ SQL stubs:
 - `apps/shopify/src/db/001_shopify_tables.sql`
 - `apps/woocommerce/src/db/001_woocommerce_tables.sql`
 
+## What the sync owns (hard rule)
+
+A connected store is the merchant's. DevJewels owns live stock; everything a
+shopper reads is theirs. `connection.sync_product_content` decides which, and it
+is **FALSE for every shop by default**.
+
+| | `sync_product_content = false` (default) | `= true` (opt in) |
+|---|---|---|
+| Product title, description, tags, product type | never written | written from the design |
+| Selling price of a variant already on the product | never written | written (cost + markup) |
+| Images / media | never written | replaced from the design |
+| Product status (active / draft) | never written | never written |
+| Product options the merchant made | left alone | one `Metal` option enforced |
+| **Which pieces exist (variants)** | **reconciled from live stock** | reconciled from live stock |
+| **Quantity per piece** | **written** | written |
+| **Wholesale unit cost** (`inventoryItem.cost`) | **written** | written |
+
+A design holds many pieces (`job_no`). A piece that sells leaves the feed, and
+its Shopify variant is deleted on the next sync — a storefront must never outlive
+the stock. A new piece is added as a variant and inherits the merchant's own
+price for that design, so it never lands at 0.00. Only pieces Channels mapped are
+ever removed: a variant the merchant added themselves is never touched, and
+Shopify needs one variant, so the last survivor is zeroed instead of deleted.
+
+Where the rule lives:
+
+- `apps/shopify/src/products.ts` — `updateShopifyProduct` routes to
+  `syncShopifyLiveStockVariants` unless `syncProductContent === true`. The guard
+  is at the adapter, not the call site, so a new caller cannot reopen the hole.
+  `createShopifyProduct` reclaim (an unmapped design that already exists in
+  Shopify) inherits the same flag.
+- `apps/core/src/services/productSyncService.ts` — revoke zeroes every mapped
+  piece instead of deleting the product, and keeps mappings so re-entitlement
+  restores stock. Only `sync_product_content = true` deletes.
+- `apps/shopify/src/merchantOwnedCatalog.selfcheck.ts` — asserts that no
+  merchant-owned mutation (`productUpdate`, `productCreateMedia`,
+  `productOption*`, `productDelete`) is ever sent with content sync off. Runs in
+  CI via `npm run selfcheck`.
+
+To hand a shop's catalog copy back to DevJewels:
+
+```sql
+UPDATE channels.connection SET sync_product_content = TRUE WHERE id = '<uuid>';
+```
+
+### Piece details on the storefront
+
+Every piece carries its stock-table row as variant metafields in namespace
+`devjewels`: `job_no` `design_no` `metal` `purity` `color` `diamond_type`
+`dia_qly` `dia_clr` `gwt` `nwt` `dwt` `swt` `size` `store` `category`
+`certificate`.
+
+The list lives in `apps/shopify/src/variantMetafieldSchema.ts` and feeds both
+writers, so values and definitions cannot drift apart:
+
+- `variantMetafields` writes the values — on add **and** on every later sync, so
+  a certificate added or a size corrected upstream reaches the storefront.
+- `ensureShopifyVariantMetafieldDefinitions` declares them to Shopify with
+  `access: { admin: MERCHANT_READ, storefront: PUBLIC_READ }`. Without a
+  definition the values are stored but not reliably readable from Liquid or the
+  Storefront API, which is why the details were invisible before.
+
+Definitions are created at connect and re-asserted at catalog import, so a shop
+connected earlier heals on its next import. Creating one that already exists is
+a no-op; the storefront access is re-applied in case it was off. The whole step
+is best effort — it is logged as `shopify_metafield_definitions_ensured` and
+never fails a connect or an import. `write_products` already covers it, so no
+merchant re-authorization is needed.
+
+A theme reads them per variant:
+
+```liquid
+{{ variant.metafields.devjewels.dia_qly }}
+{{ variant.metafields.devjewels.certificate }}
+```
+
+A detail the job does not carry is omitted rather than written blank (Shopify
+rejects an empty text field), so a value that becomes empty upstream keeps its
+last known value until it is cleared in Shopify.
+
 ## Queues (SST)
 
 Owned by core, shared across platforms:

@@ -22,12 +22,12 @@ import {
   setWebhookEventStoreForTests,
 } from "./webhookEvents";
 import {
-  setDeverpClientForTests,
-  type DeverpClient,
-  type DeverpEntitlements,
-  type DeverpReserveOrderPayload,
-  type DeverpReserveOrderResult,
-} from "../integrations/deverp/client";
+  setStoreApiClientForTests,
+  type StoreApiClient,
+  type StoreApiEntitlements,
+  type StoreApiReserveOrderPayload,
+  type StoreApiReserveOrderResult,
+} from "../integrations/storeApi/client";
 import { clearEntitlementCache } from "./entitlements";
 import { runOrderProcessingJob } from "./orderProcessingService";
 import {
@@ -53,10 +53,10 @@ function assert(cond: unknown, msg: string): asserts cond {
 }
 
 function baseEntitlements(
-  overrides: Partial<DeverpEntitlements> & {
-    permissions?: Partial<DeverpEntitlements["permissions"]>;
+  overrides: Partial<StoreApiEntitlements> & {
+    permissions?: Partial<StoreApiEntitlements["permissions"]>;
   } = {},
-): DeverpEntitlements {
+): StoreApiEntitlements {
   return {
     customer_id: 42,
     key_present: overrides.key_present ?? true,
@@ -75,12 +75,12 @@ function baseEntitlements(
 }
 
 function unusedClient(
-  overrides: Partial<DeverpClient> & {
+  overrides: Partial<StoreApiClient> & {
     reserveOrder?: (
-      payload: DeverpReserveOrderPayload,
-    ) => Promise<DeverpReserveOrderResult>;
+      payload: StoreApiReserveOrderPayload,
+    ) => Promise<StoreApiReserveOrderResult>;
   },
-): DeverpClient {
+): StoreApiClient {
   return {
     async listCatalogDesigns() {
       throw new Error("unused");
@@ -181,6 +181,7 @@ async function main(): Promise<void> {
       sync_inventory: true,
       sync_price: true,
       sync_products: true,
+      sync_product_content: false,
       sync_orders: true,
       is_active: true,
     },
@@ -201,7 +202,7 @@ async function main(): Promise<void> {
   registerDefaultAdapters();
 
   let reserved = false;
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async reserveOrder(payload) {
         assert(payload.lines.length === 1, "reserve one line");
@@ -250,7 +251,7 @@ async function main(): Promise<void> {
 
   // Denied path: can_place_orders false
   clearEntitlementCache();
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async getEntitlements() {
         return baseEntitlements({ permissions: { can_place_orders: false } });
@@ -275,7 +276,7 @@ async function main(): Promise<void> {
   setConnectionStoreForTests(null);
   setWebhookEventStoreForTests(null);
   setSyncLogStoreForTests(null);
-  setDeverpClientForTests(null);
+  setStoreApiClientForTests(null);
   setShopifyMetaStoreForTests(null);
   setVariantMappingStoreForTests(null);
   resetAdaptersForTests();

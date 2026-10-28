@@ -30,8 +30,12 @@ CREATE TABLE IF NOT EXISTS channels.connection (
   markup_bps      INTEGER NOT NULL DEFAULT 0,
   sync_inventory  BOOLEAN NOT NULL DEFAULT TRUE,
   sync_price      BOOLEAN NOT NULL DEFAULT TRUE,
-  -- Catalog create/update (title, metafields, variants). Default ON for new connects.
+  -- Catalog create (and optional content update). Default ON for new connects.
   sync_products   BOOLEAN NOT NULL DEFAULT TRUE,
+  -- When false (default): after a product is mapped, sync only inventory qty + unit cost.
+  -- Never overwrite merchant titles, descriptions, selling prices, variants, tags, images, or status.
+  -- Opt in only for shops that want DevJewels to own the storefront product copy.
+  sync_product_content BOOLEAN NOT NULL DEFAULT FALSE,
   sync_orders     BOOLEAN NOT NULL DEFAULT TRUE,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -40,6 +44,8 @@ CREATE TABLE IF NOT EXISTS channels.connection (
 -- Idempotent add for DBs created before sync_products / entitlement columns existed.
 ALTER TABLE channels.connection
   ADD COLUMN IF NOT EXISTS sync_products BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE channels.connection
+  ADD COLUMN IF NOT EXISTS sync_product_content BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE channels.connection
   ADD COLUMN IF NOT EXISTS customer_id INTEGER;
 ALTER TABLE channels.connection

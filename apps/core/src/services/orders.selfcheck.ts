@@ -23,13 +23,13 @@ import {
   setWebhookEventStoreForTests,
 } from "./webhookEvents";
 import {
-  DeverpHttpError,
-  setDeverpClientForTests,
-  type DeverpClient,
-  type DeverpEntitlements,
-  type DeverpReserveOrderPayload,
-  type DeverpReserveOrderResult,
-} from "../integrations/deverp/client";
+  StoreApiHttpError,
+  setStoreApiClientForTests,
+  type StoreApiClient,
+  type StoreApiEntitlements,
+  type StoreApiReserveOrderPayload,
+  type StoreApiReserveOrderResult,
+} from "../integrations/storeApi/client";
 import { clearEntitlementCache } from "./entitlements";
 import { runOrderProcessingJob } from "./orderProcessingService";
 import { drainMemoryOrderQueue, enqueueOrderProcessing } from "./queue";
@@ -52,10 +52,10 @@ function hmac(raw: string): string {
 }
 
 function baseEntitlements(
-  overrides: Partial<DeverpEntitlements> & {
-    permissions?: Partial<DeverpEntitlements["permissions"]>;
+  overrides: Partial<StoreApiEntitlements> & {
+    permissions?: Partial<StoreApiEntitlements["permissions"]>;
   } = {},
-): DeverpEntitlements {
+): StoreApiEntitlements {
   return {
     customer_id: 55,
     key_present: overrides.key_present ?? true,
@@ -74,10 +74,10 @@ function baseEntitlements(
 }
 
 function unusedClient(
-  overrides: Partial<DeverpClient> & {
-    reserveOrder?: (payload: DeverpReserveOrderPayload) => Promise<DeverpReserveOrderResult>;
+  overrides: Partial<StoreApiClient> & {
+    reserveOrder?: (payload: StoreApiReserveOrderPayload) => Promise<StoreApiReserveOrderResult>;
   },
-): DeverpClient {
+): StoreApiClient {
   return {
     async listCatalogDesigns() {
       throw new Error("unused");
@@ -142,6 +142,12 @@ async function main(): Promise<void> {
   const webhooks = createMemoryWebhookEventStore();
   setSyncLogStoreForTests(syncLogs);
   setWebhookEventStoreForTests(webhooks);
+  // Order processing resolves lines through variant_mapping. Without a memory
+  // store that reaches for DATABASE_URL, so the run only passed on a machine
+  // with a database to hand. Section 11 re-seeds this with its own rows.
+  const { createMemoryVariantMappingStore, setVariantMappingStoreForTests } =
+    await import("./variantMappings");
+  setVariantMappingStoreForTests(createMemoryVariantMappingStore([]));
   const connections = createMemoryConnectionStore([
       {
         id: CONN,
@@ -156,6 +162,7 @@ async function main(): Promise<void> {
         sync_inventory: true,
         sync_price: true,
         sync_products: true,
+        sync_product_content: false,
         sync_orders: true,
       },
     ]);
@@ -254,7 +261,7 @@ async function main(): Promise<void> {
   // 5) can_place_orders=false → SKIPPED, reserve never called
   clearEntitlementCache();
   let reserveCalls = 0;
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async getEntitlements() {
         return baseEntitlements({ permissions: { can_place_orders: false } });
@@ -288,7 +295,7 @@ async function main(): Promise<void> {
     payloadRef: rawBody,
   });
   reserveCalls = 0;
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async getEntitlements() {
         return baseEntitlements({
@@ -360,10 +367,10 @@ async function main(): Promise<void> {
     topic: "orders/create",
     payloadRef: rawBody,
   });
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async reserveOrder() {
-        throw new DeverpHttpError(
+        throw new StoreApiHttpError(
           409,
           `One or more items are no longer available. token=${SHPAT}`,
           {
@@ -396,10 +403,10 @@ async function main(): Promise<void> {
     topic: "orders/create",
     payloadRef: rawBody,
   });
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async reserveOrder() {
-        throw new DeverpHttpError(
+        throw new StoreApiHttpError(
           400,
           "Design DJ-ORD is not entitled for this customer.",
           { success: false },
@@ -427,7 +434,7 @@ async function main(): Promise<void> {
     topic: "orders/create",
     payloadRef: rawBody,
   });
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async getEntitlements() {
         return baseEntitlements({ permissions: { can_place_orders: true } });
@@ -467,10 +474,6 @@ async function main(): Promise<void> {
   }
 
   // 11) Real Shopify checkout shape: SKU + variant_id, no line properties → mapping resolve
-  const {
-    createMemoryVariantMappingStore,
-    setVariantMappingStoreForTests,
-  } = await import("./variantMappings");
   setVariantMappingStoreForTests(
     createMemoryVariantMappingStore([
       {
@@ -501,7 +504,7 @@ async function main(): Promise<void> {
     payloadRef: JSON.stringify(mappedPayload),
   });
   let reservedDesign = "";
-  setDeverpClientForTests(
+  setStoreApiClientForTests(
     unusedClient({
       async getEntitlements() {
         return baseEntitlements({ permissions: { can_place_orders: true } });
@@ -539,7 +542,7 @@ async function main(): Promise<void> {
   setConnectionStoreForTests(null);
   setWebhookEventStoreForTests(null);
   setSyncLogStoreForTests(null);
-  setDeverpClientForTests(null);
+  setStoreApiClientForTests(null);
   setShopifyMetaStoreForTests(null);
   resetAdaptersForTests();
   resetAdaptersReadyForTests();

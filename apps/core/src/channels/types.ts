@@ -30,6 +30,11 @@ export type ChannelJobVariantDetails = {
 export type InventoryUpdateInput = DesignJobKey & {
   connectionId: string;
   quantity: number;
+  /**
+   * DevJewels wholesale / unit cost for Shopify inventoryItem.cost.
+   * Never the storefront selling price. Omit to leave cost unchanged.
+   */
+  unitCost?: number;
   /** Optional external location / warehouse hint (platform-specific). */
   locationHint?: string;
   /** Resolved from variant_mapping before adapter call when available. */
@@ -75,11 +80,20 @@ export type CreateProductInput = {
    * (before variants/media). Prevents orphan duplicates on retry.
    */
   onExternalProductId?: (externalProductId: string) => Promise<void>;
+  /**
+   * Merchant owns storefront copy by default. When false (the default) the
+   * adapter may only reconcile the live-stock variant set + quantity + unit
+   * cost; titles, descriptions, selling prices, tags, images, product status
+   * and merchant-made options must not be written.
+   */
+  syncProductContent?: boolean;
   /** Variants keyed by job_no for mapping. */
   variants: Array<{
     jobNo: string;
     sku?: string;
     price: number;
+    /** DevJewels wholesale cost for inventoryItem.cost. Never the selling price. */
+    wholesaleCost?: number;
     quantity: number;
     /** Live stock attributes for Shopify metafields / description. */
     details?: ChannelJobVariantDetails;
@@ -169,6 +183,16 @@ export interface CommerceChannel {
 
   /** Parse verified payload into a normalized order for Django reserve. */
   handleOrder(payload: unknown, connectionId: string): Promise<NormalizedChannelOrder>;
+
+  /**
+   * One-time, idempotent store setup so the channel can display what we sync
+   * (Shopify: variant metafield definitions with storefront access).
+   * Best effort — never throws, never blocks a connect or an import.
+   */
+  ensureChannelMetadata?(input: {
+    connectionId: string;
+    credentialsSecretRef?: string;
+  }): Promise<void>;
 }
 
 export class NotImplementedError extends Error {

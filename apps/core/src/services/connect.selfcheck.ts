@@ -19,11 +19,11 @@ import {
   setShopifyMetaStoreForTests,
 } from "@devjewels-channels/shopify";
 import {
-  DeverpHttpError,
-  setDeverpClientForTests,
-  type DeverpClient,
-  type DeverpEntitlements,
-} from "../integrations/deverp/client";
+  StoreApiHttpError,
+  setStoreApiClientForTests,
+  type StoreApiClient,
+  type StoreApiEntitlements,
+} from "../integrations/storeApi/client";
 import {
   createMemoryCatalogImportStore,
   setCatalogImportStoreForTests,
@@ -55,8 +55,8 @@ const LOCATIONS_BODY = {
 
 function baseEntitlements(
   customerId: number,
-  overrides: Partial<DeverpEntitlements> = {},
-): DeverpEntitlements {
+  overrides: Partial<StoreApiEntitlements> = {},
+): StoreApiEntitlements {
   return {
     customer_id: customerId,
     key_present: true,
@@ -76,8 +76,8 @@ function baseEntitlements(
 
 function entitlementsClient(
   customerId: number,
-  overrides: Partial<DeverpEntitlements> = {},
-): DeverpClient {
+  overrides: Partial<StoreApiEntitlements> = {},
+): StoreApiClient {
   const ent = baseEntitlements(customerId, overrides);
   return {
     async listCatalogDesigns() {
@@ -160,7 +160,7 @@ async function main(): Promise<void> {
   delete process.env.PRODUCT_SYNC_QUEUE_URL;
 
   await resetStores();
-  setDeverpClientForTests(entitlementsClient(99));
+  setStoreApiClientForTests(entitlementsClient(99));
 
   const originalFetch = globalThis.fetch;
   let webhookPosts = 0;
@@ -213,7 +213,7 @@ async function main(): Promise<void> {
 
     // --- Denied: key_present=false ---
     clearEntitlementCache();
-    setDeverpClientForTests(
+    setStoreApiClientForTests(
       entitlementsClient(50, { key_present: false, api_key_id: null }),
     );
     await assertRejects(
@@ -232,7 +232,7 @@ async function main(): Promise<void> {
 
     // --- Denied: can_view_designs=false ---
     clearEntitlementCache();
-    setDeverpClientForTests(
+    setStoreApiClientForTests(
       entitlementsClient(51, {
         permissions: {
           can_view_designs: false,
@@ -255,10 +255,10 @@ async function main(): Promise<void> {
 
     // --- Denied: entitlements client error → fail closed (no half-write) ---
     clearEntitlementCache();
-    setDeverpClientForTests({
+    setStoreApiClientForTests({
       ...entitlementsClient(52),
       async getEntitlements() {
-        throw new DeverpHttpError(503, "entitlements unavailable");
+        throw new StoreApiHttpError(503, "entitlements unavailable");
       },
     });
     await assertRejects(
@@ -276,7 +276,7 @@ async function main(): Promise<void> {
 
     // --- Happy path: bind + syncOrders from can_place_orders + markup ---
     clearEntitlementCache();
-    setDeverpClientForTests(
+    setStoreApiClientForTests(
       entitlementsClient(99, {
         permissions: {
           can_view_designs: true,
@@ -358,7 +358,7 @@ async function main(): Promise<void> {
 
     // --- Reconnect must re-derive syncOrders when can_place_orders flips ---
     clearEntitlementCache();
-    setDeverpClientForTests(
+    setStoreApiClientForTests(
       entitlementsClient(99, {
         permissions: {
           can_view_designs: true,
@@ -384,7 +384,7 @@ async function main(): Promise<void> {
 
     // Restore can_place_orders for later conflict cases that reuse customer 99
     clearEntitlementCache();
-    setDeverpClientForTests(
+    setStoreApiClientForTests(
       entitlementsClient(99, {
         permissions: {
           can_view_designs: true,
@@ -409,7 +409,7 @@ async function main(): Promise<void> {
 
     // --- Denied: shop already bound to a different customer ---
     clearEntitlementCache();
-    setDeverpClientForTests(
+    setStoreApiClientForTests(
       entitlementsClient(200, {
         permissions: {
           can_view_designs: true,
@@ -446,7 +446,7 @@ async function main(): Promise<void> {
 
     // --- syncOrders=false when can_place_orders=false ---
     clearEntitlementCache();
-    setDeverpClientForTests(
+    setStoreApiClientForTests(
       entitlementsClient(300, {
         permissions: {
           can_view_designs: true,
@@ -477,7 +477,7 @@ async function main(): Promise<void> {
     globalThis.fetch = originalFetch;
     setConnectionStoreForTests(null);
     setShopifyMetaStoreForTests(null);
-    setDeverpClientForTests(null);
+    setStoreApiClientForTests(null);
     clearEntitlementCache();
   }
 }

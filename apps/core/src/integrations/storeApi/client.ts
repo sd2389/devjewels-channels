@@ -1,26 +1,34 @@
 /**
- * HTTP client for Django `channels_api` (SoT facades).
+ * HTTP client for the DevJewels store API — the Django `channels_api` facades
+ * in the devjewels-backend repo, reached at DEVJEWELS_API_BASE_URL
+ * (storeapi.devjewels.com in production). This is the source of truth for
+ * designs, inventory, prices, entitlements and order reserve.
+ *
  * Channels must never query public tables — only these endpoints.
+ *
+ * Formerly named `deverp`, after the legacy repo this stack replaced. Nothing
+ * here talks to that system; the env var keeps its name because it is wired
+ * into Infisical and the SST deploy.
  */
 
 import { requiredServerEnv } from "../../config/serverEnv";
 
-export type DeverpInventoryJob = {
+export type StoreApiInventoryJob = {
   design_no: string;
   job_no: string;
   totamt?: string | number;
   [key: string]: unknown;
 };
 
-export type DeverpInventory = {
+export type StoreApiInventory = {
   design_no: string;
   job_no: string | null;
   available_count: number;
   truncated: boolean;
-  jobs: DeverpInventoryJob[];
+  jobs: StoreApiInventoryJob[];
 };
 
-export type DeverpPrice = {
+export type StoreApiPrice = {
   customer_id: number;
   design_no: string;
   job_no?: string | null;
@@ -30,7 +38,7 @@ export type DeverpPrice = {
   currency: string;
 };
 
-export type DeverpProduct = {
+export type StoreApiProduct = {
   id: number;
   design_no: string;
   titleline?: string;
@@ -38,8 +46,8 @@ export type DeverpProduct = {
   [key: string]: unknown;
 };
 
-export type DeverpCatalogPage = {
-  items: DeverpProduct[];
+export type StoreApiCatalogPage = {
+  items: StoreApiProduct[];
   limit: number;
   after_id: number | null;
   next_after_id: number | null;
@@ -48,7 +56,7 @@ export type DeverpCatalogPage = {
   customer_id?: number;
 };
 
-export type DeverpEntitlements = {
+export type StoreApiEntitlements = {
   customer_id: number;
   key_present: boolean;
   api_key_id: number | null;
@@ -63,16 +71,16 @@ export type DeverpEntitlements = {
   design_nos_truncated: boolean;
 };
 
-export type DeverpEntitlementCheckResult = {
+export type StoreApiEntitlementCheckResult = {
   design_no: string;
   entitled: Array<{
     customer_id: number;
-    permissions: DeverpEntitlements["permissions"];
+    permissions: StoreApiEntitlements["permissions"];
   }>;
   count: number;
 };
 
-export type DeverpReserveOrderPayload = {
+export type StoreApiReserveOrderPayload = {
   platform: "SHOPIFY" | "WOOCOMMERCE" | "MAGENTO";
   connection_id: string;
   customer_id: number;
@@ -89,7 +97,7 @@ export type DeverpReserveOrderPayload = {
   }>;
 };
 
-export type DeverpReserveOrderResult = {
+export type StoreApiReserveOrderResult = {
   order_id: number;
   order_number: string;
   duplicate: boolean;
@@ -115,35 +123,35 @@ export type ChannelsCustomerPage = {
 
 const CUSTOMER_Q_MAX_LEN = 100;
 
-export type DeverpClient = {
+export type StoreApiClient = {
   listCatalogDesigns(input: {
     customerId: number;
     limit?: number;
     afterId?: number | null;
-  }): Promise<DeverpCatalogPage>;
-  getProduct(designNo: string, customerId?: number): Promise<DeverpProduct>;
-  getInventory(designNo: string, jobNo?: string): Promise<DeverpInventory>;
+  }): Promise<StoreApiCatalogPage>;
+  getProduct(designNo: string, customerId?: number): Promise<StoreApiProduct>;
+  getInventory(designNo: string, jobNo?: string): Promise<StoreApiInventory>;
   getPrice(input: {
     customerId: number;
     designNo: string;
     jobNo?: string;
-  }): Promise<DeverpPrice>;
-  getEntitlements(customerId: number): Promise<DeverpEntitlements>;
+  }): Promise<StoreApiPrice>;
+  getEntitlements(customerId: number): Promise<StoreApiEntitlements>;
   checkEntitlements(input: {
     designNo: string;
     customerIds: number[];
     requirePermission?: string;
-  }): Promise<DeverpEntitlementCheckResult>;
-  reserveOrder(payload: DeverpReserveOrderPayload): Promise<DeverpReserveOrderResult>;
+  }): Promise<StoreApiEntitlementCheckResult>;
+  reserveOrder(payload: StoreApiReserveOrderPayload): Promise<StoreApiReserveOrderResult>;
 };
 
-export class DeverpHttpError extends Error {
+export class StoreApiHttpError extends Error {
   readonly status: number;
   readonly body: unknown;
 
   constructor(status: number, message: string, body?: unknown) {
     super(message);
-    this.name = "DeverpHttpError";
+    this.name = "StoreApiHttpError";
     this.status = status;
     this.body = body;
   }
@@ -172,27 +180,27 @@ async function parseJson(response: Response): Promise<unknown> {
 
 function unwrapData<T>(body: unknown, status: number): T {
   if (!body || typeof body !== "object") {
-    throw new DeverpHttpError(status, "Invalid channels_api response");
+    throw new StoreApiHttpError(status, "Invalid channels_api response");
   }
   const obj = body as { success?: boolean; data?: T; error?: string };
   if (obj.success === false) {
-    throw new DeverpHttpError(status, obj.error || "channels_api error", body);
+    throw new StoreApiHttpError(status, obj.error || "channels_api error", body);
   }
   if (obj.data === undefined) {
-    throw new DeverpHttpError(status, "channels_api missing data", body);
+    throw new StoreApiHttpError(status, "channels_api missing data", body);
   }
   return obj.data;
 }
 
-let overrideClient: DeverpClient | null = null;
+let overrideClient: StoreApiClient | null = null;
 
-export function setDeverpClientForTests(client: DeverpClient | null): void {
+export function setStoreApiClientForTests(client: StoreApiClient | null): void {
   overrideClient = client;
 }
 
-export function createHttpDeverpClient(
+export function createHttpStoreApiClient(
   fetchImpl: typeof fetch = globalThis.fetch,
-): DeverpClient {
+): StoreApiClient {
   return {
     async listCatalogDesigns(input) {
       const params = new URLSearchParams();
@@ -206,13 +214,13 @@ export function createHttpDeverpClient(
       });
       const body = await parseJson(response);
       if (!response.ok) {
-        throw new DeverpHttpError(
+        throw new StoreApiHttpError(
           response.status,
           `listCatalogDesigns HTTP ${response.status}`,
           body,
         );
       }
-      return unwrapData<DeverpCatalogPage>(body, response.status);
+      return unwrapData<StoreApiCatalogPage>(body, response.status);
     },
 
     async getProduct(designNo, customerId) {
@@ -225,13 +233,13 @@ export function createHttpDeverpClient(
       });
       const body = await parseJson(response);
       if (!response.ok) {
-        throw new DeverpHttpError(
+        throw new StoreApiHttpError(
           response.status,
           `getProduct HTTP ${response.status}`,
           body,
         );
       }
-      return unwrapData<DeverpProduct>(body, response.status);
+      return unwrapData<StoreApiProduct>(body, response.status);
     },
 
     async getInventory(designNo, jobNo) {
@@ -244,13 +252,13 @@ export function createHttpDeverpClient(
       });
       const body = await parseJson(response);
       if (!response.ok) {
-        throw new DeverpHttpError(
+        throw new StoreApiHttpError(
           response.status,
           `getInventory HTTP ${response.status}`,
           body,
         );
       }
-      return unwrapData<DeverpInventory>(body, response.status);
+      return unwrapData<StoreApiInventory>(body, response.status);
     },
 
     async getPrice(input) {
@@ -266,13 +274,13 @@ export function createHttpDeverpClient(
       });
       const body = await parseJson(response);
       if (!response.ok) {
-        throw new DeverpHttpError(
+        throw new StoreApiHttpError(
           response.status,
           `getPrice HTTP ${response.status}`,
           body,
         );
       }
-      return unwrapData<DeverpPrice>(body, response.status);
+      return unwrapData<StoreApiPrice>(body, response.status);
     },
 
     async getEntitlements(customerId) {
@@ -283,13 +291,13 @@ export function createHttpDeverpClient(
       });
       const body = await parseJson(response);
       if (!response.ok) {
-        throw new DeverpHttpError(
+        throw new StoreApiHttpError(
           response.status,
           `getEntitlements HTTP ${response.status}`,
           body,
         );
       }
-      return unwrapData<DeverpEntitlements>(body, response.status);
+      return unwrapData<StoreApiEntitlements>(body, response.status);
     },
 
     async checkEntitlements(input) {
@@ -305,13 +313,13 @@ export function createHttpDeverpClient(
       });
       const body = await parseJson(response);
       if (!response.ok) {
-        throw new DeverpHttpError(
+        throw new StoreApiHttpError(
           response.status,
           `checkEntitlements HTTP ${response.status}`,
           body,
         );
       }
-      return unwrapData<DeverpEntitlementCheckResult>(body, response.status);
+      return unwrapData<StoreApiEntitlementCheckResult>(body, response.status);
     },
 
     async reserveOrder(payload) {
@@ -330,9 +338,9 @@ export function createHttpDeverpClient(
           typeof (body as { error: unknown }).error === "string"
             ? (body as { error: string }).error
             : `reserveOrder HTTP ${response.status}`;
-        throw new DeverpHttpError(response.status, errMsg, body);
+        throw new StoreApiHttpError(response.status, errMsg, body);
       }
-      return unwrapData<DeverpReserveOrderResult>(body, response.status);
+      return unwrapData<StoreApiReserveOrderResult>(body, response.status);
     },
   };
 }
@@ -343,7 +351,7 @@ export async function listChannelsCustomers(
 ): Promise<ChannelsCustomerPage> {
   const q = (input.q ?? "").trim();
   if (q.length > CUSTOMER_Q_MAX_LEN) {
-    throw new DeverpHttpError(400, "Query is too long.");
+    throw new StoreApiHttpError(400, "Query is too long.");
   }
   const params = new URLSearchParams();
   if (q) params.set("q", q);
@@ -363,15 +371,15 @@ export async function listChannelsCustomers(
       typeof (body as { error: unknown }).error === "string"
         ? (body as { error: string }).error
         : `listChannelsCustomers HTTP ${response.status}`;
-    throw new DeverpHttpError(response.status, errMsg, body);
+    throw new StoreApiHttpError(response.status, errMsg, body);
   }
   return unwrapData<ChannelsCustomerPage>(body, response.status);
 }
 
 /** Live client — overridable in tests. */
-export const deverpClient: DeverpClient = new Proxy({} as DeverpClient, {
+export const storeApiClient: StoreApiClient = new Proxy({} as StoreApiClient, {
   get(_target, prop, receiver) {
-    const client = overrideClient ?? createHttpDeverpClient();
+    const client = overrideClient ?? createHttpStoreApiClient();
     const value = Reflect.get(client, prop, receiver);
     return typeof value === "function" ? value.bind(client) : value;
   },

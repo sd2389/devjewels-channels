@@ -3,9 +3,9 @@
  */
 import { AdapterRouter } from "@/channels/router";
 import {
-  DeverpHttpError,
-  deverpClient,
-} from "@/integrations/deverp/client";
+  StoreApiHttpError,
+  storeApiClient,
+} from "@/integrations/storeApi/client";
 import { safeErrorMessage } from "@/security/redact";
 import {
   applyResolvedLines,
@@ -121,7 +121,7 @@ export async function runOrderProcessingJob(
 
     const shell = await adapter.handleOrder(payload, job.connectionId);
     const normalized = applyResolvedLines(shell, resolved.lines);
-    const result = await deverpClient.reserveOrder({
+    const result = await storeApiClient.reserveOrder({
       platform: normalized.platform,
       connection_id: normalized.connectionId,
       customer_id: connection.customer_id,
@@ -164,7 +164,7 @@ export async function runOrderProcessingJob(
     });
     await store.markStatus(event.id, "failed");
     // Non-retryable conflict (qty 0) should not poison the queue forever.
-    if (err instanceof DeverpHttpError && (err.status === 409 || err.status === 400)) {
+    if (err instanceof StoreApiHttpError && (err.status === 409 || err.status === 400)) {
       return "FAILED";
     }
     throw err;

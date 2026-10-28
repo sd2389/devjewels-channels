@@ -71,7 +71,14 @@ export async function runInventorySyncJob(
     return "FAILED";
   }
 
-  if (!connection.is_active || !connection.sync_inventory) {
+  // Taking a revoked design off sale is the one write that must survive the
+  // sync gates. key_revoked turns every sync flag off before it fans out the
+  // de-listing jobs, and the design is gone from the feed by definition, so
+  // honouring either gate here would leave sold-out pieces buyable. It only
+  // ever writes zero, so it cannot push stock to a shop that opted out.
+  const revoking = job.reason === "revoked";
+
+  if (!connection.is_active || (!connection.sync_inventory && !revoking)) {
     await writeSyncLog({
       connectionId: job.connectionId,
       platform: job.platform,
@@ -87,13 +94,14 @@ export async function runInventorySyncJob(
   const { requireSyncableEntitlements, designInFeed } = await import(
     "@/services/entitlements"
   );
-  const entitlements = await requireSyncableEntitlements(connection.customer_id, {
-    fresh: true,
-  });
+  const entitlements = revoking
+    ? null
+    : await requireSyncableEntitlements(connection.customer_id, { fresh: true });
   if (
-    !entitlements ||
-    !entitlements.permissions.can_view_inventory ||
-    !designInFeed(entitlements, job.designNo)
+    !revoking &&
+    (!entitlements ||
+      !entitlements.permissions.can_view_inventory ||
+      !designInFeed(entitlements, job.designNo))
   ) {
     await writeSyncLog({
       connectionId: job.connectionId,
@@ -136,7 +144,16 @@ export async function runInventorySyncJob(
       connectionId: job.connectionId,
       designNo: job.designNo,
       jobNo: job.jobNo,
-      quantity: job.quantity,
+      quantity: revoking ? 0 : job.quantity,
+      // Re-checked here, not just at enqueue: a job can sit in the queue
+      // across a permission change, and cost must never reach a shop whose
+      // customer cannot see prices.
+      ...(!revoking &&
+      entitlements?.permissions.can_view_prices &&
+      job.unitCost != null &&
+      Number.isFinite(job.unitCost)
+        ? { unitCost: job.unitCost }
+        : {}),
       externalInventoryItemId: mapping.external_inventory_item_id,
       credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
     });
@@ -147,7 +164,7 @@ export async function runInventorySyncJob(
       status: "SUCCESS",
       designNo: job.designNo,
       jobNo: job.jobNo,
-      message: "ok",
+      message: revoking ? "revoked_zeroed" : "ok",
     });
     return "SUCCESS";
   } catch (err) {

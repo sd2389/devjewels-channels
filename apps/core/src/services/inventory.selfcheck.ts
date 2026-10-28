@@ -31,9 +31,9 @@ import {
   type VariantMappingRow,
 } from "./inventoryFanOut";
 import {
-  setDeverpClientForTests,
-  type DeverpClient,
-} from "../integrations/deverp/client";
+  setStoreApiClientForTests,
+  type StoreApiClient,
+} from "../integrations/storeApi/client";
 import { clearEntitlementCache } from "./entitlements";
 import {
   drainMemoryInventoryQueue,
@@ -69,12 +69,13 @@ function baseConnection(overrides: Partial<ConnectionRow> = {}): ConnectionRow {
     sync_inventory: true,
     sync_price: true,
     sync_products: true,
+    sync_product_content: false,
     sync_orders: true,
     ...overrides,
   };
 }
 
-function mockDeverp(state: EntState): DeverpClient {
+function mockStoreApi(state: EntState): StoreApiClient {
   return {
     async listCatalogDesigns() {
       throw new Error("unused");
@@ -287,7 +288,7 @@ async function main(): Promise<void> {
   setConnectionStoreForTests(createMemoryConnectionStore([baseConnection()]));
   seedMapping();
   setProductMappingStoreForTests(createMemoryProductMappingStore());
-  setDeverpClientForTests(mockDeverp(entState));
+  setStoreApiClientForTests(mockStoreApi(entState));
   clearEntitlementCache();
   setShopifyMetaStoreForTests(
     createMemoryShopifyMetaStore({
@@ -645,7 +646,7 @@ async function main(): Promise<void> {
   setProductMappingStoreForTests(null);
   setSyncLogStoreForTests(null);
   setShopifyMetaStoreForTests(null);
-  setDeverpClientForTests(null);
+  setStoreApiClientForTests(null);
   clearEntitlementCache();
   resetAdaptersForTests();
   resetAdaptersReadyForTests();

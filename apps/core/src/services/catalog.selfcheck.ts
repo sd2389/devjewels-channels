@@ -31,7 +31,7 @@ import {
   createMemoryVariantMappingStore,
   setVariantMappingStoreForTests,
 } from "./variantMappings";
-import { setDeverpClientForTests, type DeverpClient } from "../integrations/deverp/client";
+import { setStoreApiClientForTests, type StoreApiClient } from "../integrations/storeApi/client";
 import { runCatalogImport } from "./catalogImportService";
 import { clearEntitlementCache } from "./entitlements";
 import {
@@ -60,11 +60,12 @@ function baseConnection(): ConnectionRow {
     sync_inventory: true,
     sync_price: true,
     sync_products: true,
+    sync_product_content: false,
     sync_orders: true,
   };
 }
 
-function mockDeverp(): DeverpClient {
+function mockStoreApi(): StoreApiClient {
   return {
     async listCatalogDesigns() {
       return {
@@ -169,7 +170,7 @@ async function main(): Promise<void> {
   setCatalogImportStoreForTests(imports);
   setConnectionDesignMarkupStoreForTests(createMemoryConnectionDesignMarkupStore());
   setConnectionStoreForTests(createMemoryConnectionStore([baseConnection()]));
-  setDeverpClientForTests(mockDeverp());
+  setStoreApiClientForTests(mockStoreApi());
   setShopifyMetaStoreForTests(
     createMemoryShopifyMetaStore({
       shops: [{ connection_id: CONN, shop_domain: "catalog.myshopify.com" }],
@@ -375,7 +376,7 @@ async function main(): Promise<void> {
     drainMemoryInventoryQueue();
 
     // Full API-key revoke must deny manual/backfill imports before Shopify work.
-    const revokedClient = mockDeverp();
+    const revokedClient = mockStoreApi();
     revokedClient.getEntitlements = async () => ({
       customer_id: 1,
       key_present: false,
@@ -390,7 +391,7 @@ async function main(): Promise<void> {
       design_count: 0,
       design_nos_truncated: false,
     });
-    setDeverpClientForTests(revokedClient);
+    setStoreApiClientForTests(revokedClient);
     clearEntitlementCache();
     let importDenied = false;
     try {
@@ -422,7 +423,7 @@ async function main(): Promise<void> {
     setVariantMappingStoreForTests(null);
     setSyncLogStoreForTests(null);
     setConnectionDesignMarkupStoreForTests(null);
-    setDeverpClientForTests(null);
+    setStoreApiClientForTests(null);
     setShopifyMetaStoreForTests(null);
     resetAdaptersForTests();
     resetAdaptersReadyForTests();

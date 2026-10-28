@@ -14,7 +14,7 @@ import {
   getCatalogImportStore,
   type CatalogImportRow,
 } from "@/services/catalogImportStore";
-import { deverpClient } from "@/integrations/deverp/client";
+import { storeApiClient } from "@/integrations/storeApi/client";
 import { resolveChannelVariantPrice } from "@/services/channelUnitPrice";
 import {
   loadDesignMarkupMap,
@@ -114,7 +114,7 @@ async function collectEligibleDesigns(
   }> = [];
   let afterId: number | null = null;
   while (out.length < maxDesigns) {
-    const page = await deverpClient.listCatalogDesigns({
+    const page = await storeApiClient.listCatalogDesigns({
       customerId,
       limit: Math.min(pageSize, maxDesigns - out.length),
       afterId,
@@ -162,6 +162,8 @@ async function importOneDesign(input: {
   canViewPrices: boolean;
   canViewInventory: boolean;
   syncInventory: boolean;
+  /** When false, mapped products get inventory qty + cost only. */
+  syncProductContent: boolean;
   markupMode?: string | null;
   markupValue?: number | null;
   markupBps?: number | null;
@@ -174,7 +176,7 @@ async function importOneDesign(input: {
   tags: string[];
   stoneWt?: string;
 }): Promise<"ok" | "skipped" | "failed"> {
-  const inventory = await deverpClient.getInventory(input.designNo);
+  const inventory = await storeApiClient.getInventory(input.designNo);
   // Live jobs only; OOS → design_no placeholder. Drops leftover placeholders on re-sync.
   const resolved = resolveChannelInventoryJobs(
     input.designNo,
@@ -187,11 +189,12 @@ async function importOneDesign(input: {
   const variants = [];
   for (const j of jobs) {
     const jobNo = String(j.job_no).trim();
+    const wholesaleCost = parsePrice(j.totamt ?? input.defaultPrice);
     const price = await resolveChannelVariantPrice({
       customerId: input.customerId,
       designNo: input.designNo,
       jobNo,
-      fallbackPrice: parsePrice(j.totamt ?? input.defaultPrice),
+      fallbackPrice: wholesaleCost,
       canViewPrices: input.canViewPrices,
       markupMode: input.markupMode,
       markupValue: input.markupValue,
@@ -202,6 +205,7 @@ async function importOneDesign(input: {
       jobNo,
       sku: jobNo,
       price,
+      wholesaleCost,
       quantity: outOfStock ? 0 : 1,
       details: detailsFromInventoryJob(
         j as Record<string, unknown>,
@@ -274,6 +278,7 @@ async function importOneDesign(input: {
         connectionId: input.connectionId,
         designNo: input.designNo,
         title: input.title,
+        syncProductContent: input.syncProductContent,
         credentialsSecretRef: input.credentialsSecretRef ?? undefined,
         externalProductId: existing.external_product_id,
         imageUrls: input.imageUrls,
@@ -288,6 +293,7 @@ async function importOneDesign(input: {
         connectionId: input.connectionId,
         designNo: input.designNo,
         title: input.title,
+        syncProductContent: input.syncProductContent,
         credentialsSecretRef: input.credentialsSecretRef ?? undefined,
         imageUrls: input.imageUrls,
         productType: input.productType,
@@ -322,15 +328,34 @@ async function importOneDesign(input: {
 
     if (input.canViewInventory && input.syncInventory) {
       for (const variant of result.variants) {
-        const quantity =
-          variants.find((candidate) => candidate.jobNo === variant.jobNo)?.quantity ?? 0;
+        const live = variants.find(
+          (candidate) => candidate.jobNo === variant.jobNo,
+        );
         await enqueueInventorySync({
           kind: "inventory.sync",
           connectionId: input.connectionId,
           platform: input.platform,
           designNo: input.designNo,
           jobNo: variant.jobNo,
-          quantity,
+          // No live job behind the variant means the piece is sold — zero it.
+          quantity: live?.quantity ?? 0,
+          // Wholesale cost is price data — see runProductSyncJob.
+          ...(live != null && input.canViewPrices
+            ? { unitCost: live.wholesaleCost }
+            : {}),
+        });
+      }
+    } else if (!input.canViewInventory) {
+      // Inventory permission lost — see runProductSyncJob.
+      for (const variant of result.variants) {
+        await enqueueInventorySync({
+          kind: "inventory.sync",
+          connectionId: input.connectionId,
+          platform: input.platform,
+          designNo: input.designNo,
+          jobNo: variant.jobNo,
+          quantity: 0,
+          reason: "revoked",
         });
       }
     }
@@ -426,6 +451,14 @@ export async function runCatalogImport(
     );
   }
 
+  // Declare the piece-detail fields to the channel before pushing products, so
+  // a shop connected before definitions existed heals on its next import.
+  const setupAdapter = AdapterRouter.get(connection.platform);
+  await setupAdapter.ensureChannelMetadata?.({
+    connectionId: connection.id,
+    credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
+  });
+
   const store = getCatalogImportStore();
   const job =
     options.importId != null
@@ -459,6 +492,7 @@ export async function runCatalogImport(
       canViewPrices: Boolean(entitlements.permissions.can_view_prices),
       canViewInventory: Boolean(entitlements.permissions.can_view_inventory),
       syncInventory: connection.sync_inventory,
+      syncProductContent: connection.sync_product_content,
       markupMode: connection.markup_mode,
       markupValue: connection.markup_value,
       markupBps: connection.markup_bps,

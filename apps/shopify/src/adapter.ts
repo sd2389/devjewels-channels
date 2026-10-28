@@ -17,7 +17,11 @@ import {
 import { resolveShopifyCredentials } from "../../core/src/security/secrets";
 import { safeErrorMessage } from "../../core/src/security/redact";
 import { createShopifyClient, ShopifyRateLimitError } from "./client";
-import { setShopifyInventoryLevel } from "./inventory";
+import {
+  setShopifyInventoryCost,
+  setShopifyInventoryLevel,
+} from "./inventory";
+import { ensureShopifyVariantMetafieldDefinitions } from "./metafieldDefinitions";
 import { getShopifyMetaStore } from "./meta";
 import {
   createShopifyProduct,
@@ -37,6 +41,34 @@ export { ShopifyRateLimitError, ShopifyHttpError } from "./client";
  */
 export const shopifyAdapter: CommerceChannel = {
   platform: "SHOPIFY",
+
+  async ensureChannelMetadata(input: {
+    connectionId: string;
+    credentialsSecretRef?: string;
+  }): Promise<void> {
+    const secretRef = input.credentialsSecretRef?.trim();
+    if (!secretRef) return;
+    try {
+      const meta = getShopifyMetaStore();
+      const shop = await meta.getShop(input.connectionId);
+      const credentials = await resolveShopifyCredentials(
+        secretRef,
+        shop?.shop_domain,
+      );
+      await ensureShopifyVariantMetafieldDefinitions(
+        createShopifyClient({
+          shopDomain: credentials.shopDomain,
+          accessToken: credentials.accessToken,
+        }),
+      );
+    } catch (err) {
+      // Stock sync matters more than the display fields: log and carry on.
+      console.warn("shopify_metafield_definitions_skipped", {
+        connectionId: input.connectionId,
+        error: safeErrorMessage(err),
+      });
+    }
+  },
 
   async createProduct(input: CreateProductInput): Promise<CreateProductResult> {
     const secretRef = input.credentialsSecretRef?.trim();
@@ -196,9 +228,16 @@ export const shopifyAdapter: CommerceChannel = {
       jobNo: input.jobNo,
       shopDomain: credentials.shopDomain,
       quantity: input.quantity,
+      hasUnitCost: input.unitCost != null,
     });
 
     try {
+      if (input.unitCost != null && Number.isFinite(input.unitCost)) {
+        await setShopifyInventoryCost(client, {
+          inventoryItemId,
+          cost: input.unitCost,
+        });
+      }
       await setShopifyInventoryLevel(client, {
         inventoryItemId,
         locationId,

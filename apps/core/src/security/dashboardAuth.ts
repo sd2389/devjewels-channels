@@ -4,7 +4,7 @@
  * - If CHANNELS_DASHBOARD_PASSWORD is unset, allow same-origin (local staff UX)
  * - If set, require cookie channels_dashboard=1 after POST /api/admin/login
  */
-import { DeverpHttpError } from "@/integrations/deverp/client";
+import { StoreApiHttpError } from "@/integrations/storeApi/client";
 import { optionalServerEnv } from "@/config/serverEnv";
 import { cookies } from "next/headers";
 import {
@@ -39,7 +39,7 @@ export function jsonError(err: unknown, fallbackStatus = 500): Response {
   if (err instanceof ServiceAuthError) {
     return Response.json({ error: err.message }, { status: err.status });
   }
-  if (err instanceof DeverpHttpError) {
+  if (err instanceof StoreApiHttpError) {
     const status = err.status >= 400 && err.status < 600 ? err.status : fallbackStatus;
     const message = status >= 500 ? "Request failed" : err.message;
     return Response.json({ error: message }, { status });

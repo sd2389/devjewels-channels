@@ -4,9 +4,9 @@
  */
 import { requiredServerEnv } from "../config/serverEnv";
 import {
-  DeverpHttpError,
+  StoreApiHttpError,
   listChannelsCustomers,
-} from "./deverp/client";
+} from "./storeApi/client";
 
 function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg);
@@ -65,7 +65,7 @@ async function main(): Promise<void> {
     );
     throw new Error("API failure must surface");
   } catch (err) {
-    assert(err instanceof DeverpHttpError, "DeverpHttpError");
+    assert(err instanceof StoreApiHttpError, "StoreApiHttpError");
     assert(err.status === 403, "status 403");
     assert(/disabled/i.test(err.message), "safe error message");
   }
@@ -76,11 +76,11 @@ async function main(): Promise<void> {
     );
     throw new Error("unauthenticated must surface");
   } catch (err) {
-    assert(err instanceof DeverpHttpError, "unauth DeverpHttpError");
+    assert(err instanceof StoreApiHttpError, "unauth StoreApiHttpError");
     assert(err.status === 401, "status 401");
   }
 
-  console.log("deverp.customers.selfcheck ok");
+  console.log("storeApi.customers.selfcheck ok");
 }
 
 main().catch((err) => {

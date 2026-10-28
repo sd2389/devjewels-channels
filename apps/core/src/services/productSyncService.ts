@@ -1,6 +1,8 @@
 /**
- * Per-design product sync: create/update when entitled; delete when revoked.
- * Pulls title/price/jobs from Django channels_api facades (customer-scoped).
+ * Per-design product sync: create when entitled; delete when revoked.
+ * Mapped products default to inventory qty + wholesale cost only — merchant
+ * owns titles, descriptions, selling prices, variants, tags, images, status
+ * unless connection.sync_product_content is opted in.
  */
 import { registerDefaultAdapters } from "@/channels/registerAdapters";
 import { AdapterRouter } from "@/channels/router";
@@ -9,7 +11,7 @@ import {
   NotImplementedError,
 } from "@/channels/types";
 import { getConnectionById } from "@/services/connections";
-import { deverpClient } from "@/integrations/deverp/client";
+import { storeApiClient } from "@/integrations/storeApi/client";
 import {
   designInFeed,
   requireSyncableEntitlements,
@@ -92,6 +94,37 @@ async function runProductDelete(
       message: "not_mapped",
     });
     return "SKIPPED";
+  }
+
+  // A merchant-owned product is never deleted: its page, URL, photos, reviews
+  // and SEO are the merchant's work, and a revoke must not destroy them. Zeroing
+  // every mapped piece takes the design off sale, which is what revoke is for,
+  // and leaves the mappings so re-entitlement puts stock straight back.
+  if (!connection.sync_product_content) {
+    const mapped = await getVariantMappingStore().listByDesign(
+      job.connectionId,
+      designNo,
+    );
+    for (const variant of mapped) {
+      await enqueueInventorySync({
+        kind: "inventory.sync",
+        connectionId: job.connectionId,
+        platform: job.platform,
+        designNo,
+        jobNo: variant.job_no,
+        quantity: 0,
+        reason: "revoked",
+      });
+    }
+    await writeSyncLog({
+      connectionId: job.connectionId,
+      platform: job.platform,
+      jobType: "product",
+      status: "SUCCESS",
+      designNo,
+      message: `revoked_zeroed pieces=${mapped.length} (product kept, merchant owns content)`,
+    });
+    return "DELETED";
   }
 
   const adapter = AdapterRouter.get(job.platform);
@@ -242,7 +275,7 @@ export async function runProductSyncJob(
   let category = "";
   let stoneWt = "";
   try {
-    const product = await deverpClient.getProduct(designNo, connection.customer_id!);
+    const product = await storeApiClient.getProduct(designNo, connection.customer_id!);
     title = String(product.titleline || designNo).trim() || designNo;
     defaultPrice = parsePrice(product.totamt);
     imageUrls = resolveDesignImageUrls({
@@ -278,7 +311,7 @@ export async function runProductSyncJob(
   const canViewPrices = entitlements.permissions.can_view_prices;
 
   const inventory = canViewInventory
-    ? await deverpClient.getInventory(designNo)
+    ? await storeApiClient.getInventory(designNo)
     : { jobs: [] as Array<{ job_no?: string; totamt?: string | number }> };
   // Live jobs only; OOS → single design_no placeholder. Dedupes upstream duplicates.
   const resolved = resolveChannelInventoryJobs(
@@ -299,11 +332,13 @@ export async function runProductSyncJob(
   const variants = [];
   for (const j of jobs) {
     const jobNo = String(j.job_no).trim();
+    // Wholesale / unit cost — never apply Channels markup (that is selling price).
+    const wholesaleCost = parsePrice(j.totamt ?? defaultPrice);
     const unitPrice = await resolveChannelVariantPrice({
       customerId: connection.customer_id,
       designNo,
       jobNo,
-      fallbackPrice: parsePrice(j.totamt ?? defaultPrice),
+      fallbackPrice: wholesaleCost,
       canViewPrices,
       markupMode: connection.markup_mode,
       markupValue: connection.markup_value,
@@ -314,6 +349,7 @@ export async function runProductSyncJob(
       jobNo,
       sku: jobNo,
       price: unitPrice,
+      wholesaleCost,
       quantity: canViewInventory && !resolved.outOfStock ? 1 : 0,
       details: detailsFromInventoryJob(
         j as Record<string, unknown>,
@@ -362,6 +398,7 @@ export async function runProductSyncJob(
         job.connectionId,
         designNo,
       );
+
       const existingVariants = [];
       for (const v of variants) {
         const mapped = allMapped.find(
@@ -390,6 +427,7 @@ export async function runProductSyncJob(
         connectionId: job.connectionId,
         designNo,
         title,
+        syncProductContent: connection.sync_product_content,
         credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
         externalProductId: existing.external_product_id,
         imageUrls,
@@ -423,13 +461,16 @@ export async function runProductSyncJob(
         jobType: "product",
         status: "SUCCESS",
         designNo,
-        message: `updated variants=${updated.variants.length} removed=${removeVariants.length}`,
+        message: connection.sync_product_content
+          ? `updated variants=${updated.variants.length} removed=${removeVariants.length}`
+          : `live_stock_only variants=${updated.variants.length} (merchant owns content)`,
       });
     } else {
       const created = await adapter.createProduct({
         connectionId: job.connectionId,
         designNo,
         title,
+        syncProductContent: connection.sync_product_content,
         credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
         imageUrls,
         productType,
@@ -474,15 +515,40 @@ export async function runProductSyncJob(
     // Immediately set inventory after create/update when permission allows.
     if (canViewInventory && connection.sync_inventory) {
       for (const variant of resultVariants) {
-        const qty =
-          variants.find((v) => v.jobNo === variant.jobNo)?.quantity ?? 0;
+        const live = variants.find((v) => v.jobNo === variant.jobNo);
         await enqueueInventorySync({
           kind: "inventory.sync",
           connectionId: job.connectionId,
           platform: job.platform,
           designNo,
           jobNo: variant.jobNo,
-          quantity: qty,
+          // No live job behind the variant means the piece is sold — zero it.
+          quantity: live?.quantity ?? 0,
+          // Wholesale cost is price data. A customer entitled to inventory but
+          // not to prices must not get it written into their Shopify admin;
+          // resolveChannelVariantPrice already zeroes the selling price for
+          // that combination, and totamt comes off an endpoint that is not
+          // customer-scoped, so the gate has to be here.
+          ...(live != null && canViewPrices
+            ? { unitCost: live.wholesaleCost }
+            : {}),
+        });
+      }
+    } else if (!canViewInventory) {
+      // Inventory permission is gone while designs stay entitled. The
+      // reconcile above already dropped every piece it could and kept one back
+      // for zeroing, but sync_inventory is off now too, so the normal write
+      // above never runs and that piece would keep its last quantity forever.
+      // The zero-only revoked write bypasses both gates for exactly this.
+      for (const variant of resultVariants) {
+        await enqueueInventorySync({
+          kind: "inventory.sync",
+          connectionId: job.connectionId,
+          platform: job.platform,
+          designNo,
+          jobNo: variant.jobNo,
+          quantity: 0,
+          reason: "revoked",
         });
       }
     }
