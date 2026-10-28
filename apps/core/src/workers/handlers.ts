@@ -25,9 +25,10 @@ export type InventorySyncJob = QueueJobEnvelope & {
   /** Wholesale unit cost (Shopify inventory item cost). Not the selling price. */
   unitCost?: number;
   /**
-   * De-listing write for a design that just lost entitlement. The feed no
-   * longer carries the design, so the usual entitlement gate would skip the
-   * job and leave stock on sale. Forces quantity 0 and nothing else.
+   * De-listing write for a design that just lost entitlement, or a shop that
+   * lost inventory permission. The usual sync_inventory and entitlement gates
+   * would skip the job and leave stock on sale. Forces quantity 0 and nothing
+   * else.
    */
   reason?: "revoked";
 };

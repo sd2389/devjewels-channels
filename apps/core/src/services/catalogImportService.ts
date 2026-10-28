@@ -345,6 +345,19 @@ async function importOneDesign(input: {
             : {}),
         });
       }
+    } else if (!input.canViewInventory) {
+      // Inventory permission lost — see runProductSyncJob.
+      for (const variant of result.variants) {
+        await enqueueInventorySync({
+          kind: "inventory.sync",
+          connectionId: input.connectionId,
+          platform: input.platform,
+          designNo: input.designNo,
+          jobNo: variant.jobNo,
+          quantity: 0,
+          reason: "revoked",
+        });
+      }
     }
 
     await writeSyncLog({

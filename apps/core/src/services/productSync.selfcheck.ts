@@ -1032,6 +1032,28 @@ async function main(): Promise<void> {
         `permissions_changed must delete mapped extras not in feed, got ${JSON.stringify(permJobs)}`,
       );
     }
+    // Inventory permission lost, designs still entitled: the reconcile keeps a
+    // piece back for zeroing, but sync_inventory is now off too. Without a
+    // zero-only write that piece would stay on sale at its last quantity.
+    const reconcile = permJobs.find((j) => j.action !== "delete");
+    if (!reconcile) throw new Error("permissions_changed must enqueue a reconcile job");
+    drainMemoryInventoryQueue();
+    await runProductSyncJob(reconcile);
+    const lostInvJobs = drainMemoryInventoryQueue();
+    if (
+      !lostInvJobs.length ||
+      lostInvJobs.some((j) => j.quantity !== 0 || j.reason !== "revoked")
+    ) {
+      throw new Error(
+        `losing inventory permission must zero every returned piece: ${JSON.stringify(lostInvJobs)}`,
+      );
+    }
+    const zeroOutcome = await runInventorySyncJob(lostInvJobs[0]!);
+    if (zeroOutcome !== "SUCCESS") {
+      throw new Error(
+        `the zero write must get past sync_inventory=false, got ${zeroOutcome} (${syncLogs.rows.at(-1)?.message})`,
+      );
+    }
 
     // --- Event without customer_id fails closed at envelope parse (no crash) ---
     const missingCustomer = safeParseEventEnvelope({

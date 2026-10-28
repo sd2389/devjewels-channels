@@ -534,6 +534,23 @@ export async function runProductSyncJob(
             : {}),
         });
       }
+    } else if (!canViewInventory) {
+      // Inventory permission is gone while designs stay entitled. The
+      // reconcile above already dropped every piece it could and kept one back
+      // for zeroing, but sync_inventory is off now too, so the normal write
+      // above never runs and that piece would keep its last quantity forever.
+      // The zero-only revoked write bypasses both gates for exactly this.
+      for (const variant of resultVariants) {
+        await enqueueInventorySync({
+          kind: "inventory.sync",
+          connectionId: job.connectionId,
+          platform: job.platform,
+          designNo,
+          jobNo: variant.jobNo,
+          quantity: 0,
+          reason: "revoked",
+        });
+      }
     }
 
     return outcome;
