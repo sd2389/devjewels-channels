@@ -715,6 +715,44 @@ async function main(): Promise<void> {
     JSON.stringify(collapseValues),
   );
 
+  // Same collapse, but the replacement shares a metal with a sold piece that is
+  // still on the product while it is created.
+  const clashing = merchantProduct();
+  await updateShopifyProduct(
+    clashing.client,
+    updateInput({
+      syncProductContent: true,
+      variants: [
+        job("DE-093_B9.00", { details: { metal: "Gold", purity: "14K", color: "W" } }),
+      ],
+      existingVariants: [],
+      removeVariants: [
+        { jobNo: "DE-093_B2.00", externalVariantId: "gid://shopify/ProductVariant/100" },
+        { jobNo: "DE-093_B3.00", externalVariantId: "gid://shopify/ProductVariant/200" },
+      ],
+    }) as never,
+  );
+  const clashCreate = clashing.calls.find((c) => c.op === "productVariantsBulkCreate");
+  const clashValue = (
+    (clashCreate?.variables.variants ?? []) as Array<{
+      optionValues?: Array<{ name: string }>;
+    }>
+  )[0]?.optionValues?.[0]?.name;
+  check(
+    "a replacement never repeats a sold piece's label",
+    clashValue !== undefined && clashValue !== "14K White Gold",
+    String(clashValue),
+  );
+  const clashOps = clashing.calls.map((c) => c.op);
+  check(
+    "the sold pieces are still removed and the picker collapsed",
+    clashOps.includes("productVariantsBulkDelete") &&
+      clashOps.includes("productOptionsDelete") &&
+      clashOps.indexOf("productVariantsBulkCreate") <
+        clashOps.indexOf("productVariantsBulkDelete"),
+    clashOps.join(", "),
+  );
+
   console.log("reclaim: an unmapped design that already exists in Shopify");
 
   const reclaimSeed = fakeClient({

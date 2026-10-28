@@ -1645,6 +1645,13 @@ export async function updateShopifyProduct(
     const survivingOption = plan
       ? null
       : live.options.find((o) => isOwnedOption(o.name))?.name;
+    // The sold variants are still on the product while the replacement is
+    // created, so its label must not repeat one of theirs — a new White Gold
+    // piece replacing a White Gold/Yellow Gold pair would otherwise be rejected
+    // with VARIANT_ALREADY_EXISTS_CHANGE_OPTION_VALUE and abort the sync before
+    // anything is removed. Any suffix this adds is temporary: the option is
+    // collapsed below once the replacement is the only piece left.
+    const taken = survivingOption ? takenOptionTuples(live) : new Set<string>();
     const createOption = (v: CreateProductInput["variants"][number]) => {
       if (plan) {
         return {
@@ -1653,14 +1660,15 @@ export async function updateShopifyProduct(
         };
       }
       if (!survivingOption) return undefined;
-      return {
-        name: survivingOption,
-        value: clipOptionValue(
-          isLegacyJobOption(survivingOption)
-            ? v.jobNo.trim()
-            : storefrontMetalLabel(v.details) || v.jobNo.trim(),
-        ),
-      };
+      const wanted = clipOptionValue(
+        isLegacyJobOption(survivingOption)
+          ? v.jobNo.trim()
+          : storefrontMetalLabel(v.details) || v.jobNo.trim(),
+      );
+      const [unique] =
+        uniqueOptionValues([{ optionName: survivingOption, name: wanted }], v, taken) ??
+        [{ optionName: survivingOption, name: wanted }];
+      return { name: unique.optionName, value: unique.name };
     };
     const bulk = await client.graphql<BulkVariantData>(PRODUCT_VARIANTS_BULK_CREATE, {
       productId,
