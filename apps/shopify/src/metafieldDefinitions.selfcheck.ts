@@ -87,6 +87,21 @@ async function main(): Promise<void> {
     "all under the devjewels namespace",
     written.every((m) => m.namespace === DEVJEWELS_METAFIELD_NAMESPACE),
   );
+  check(
+    "colour is written as a word a shopper can read",
+    written.find((m) => m.key === "color")?.value === "Yellow",
+    written.find((m) => m.key === "color")?.value,
+  );
+  const colours = ["W", "y", "R", "TT"].map(
+    (code) =>
+      variantMetafields("D", "J", { color: code }).find((m) => m.key === "color")
+        ?.value,
+  );
+  check(
+    "every known code maps, and an unknown one passes through untouched",
+    JSON.stringify(colours) === JSON.stringify(["White", "Yellow", "Rose", "TT"]),
+    JSON.stringify(colours),
+  );
 
   console.log("create: a fresh shop");
 

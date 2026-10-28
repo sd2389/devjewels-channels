@@ -21,6 +21,23 @@ export const VARIANT_METAFIELD_TYPE = "single_line_text_field";
 /** Shopify caps a single_line_text_field at 255 characters. */
 const VALUE_MAX = 255;
 
+/**
+ * Metal colour codes as the backend stores them. The storefront picker and the
+ * Color metafield both read this map, so a shopper never sees "Y" in one place
+ * and "Yellow" in the other.
+ */
+export const METAL_COLOR_WORDS: Record<string, string> = {
+  w: "White",
+  y: "Yellow",
+  r: "Rose",
+};
+
+/** "Y" → "Yellow". A code outside the map passes through unchanged. */
+export function metalColorWord(raw: string | undefined): string {
+  const code = String(raw || "").trim();
+  return METAL_COLOR_WORDS[code.toLowerCase()] ?? code;
+}
+
 export type VariantMetafieldContext = {
   designNo: string;
   jobNo: string;
@@ -39,7 +56,7 @@ export const VARIANT_METAFIELD_FIELDS: VariantMetafieldField[] = [
   { key: "design_no", name: "Design No", read: (c) => c.designNo },
   { key: "metal", name: "Metal", read: (c) => c.details?.metal },
   { key: "purity", name: "Quality", read: (c) => c.details?.purity },
-  { key: "color", name: "Color", read: (c) => c.details?.color },
+  { key: "color", name: "Color", read: (c) => metalColorWord(c.details?.color) },
   { key: "diamond_type", name: "Type", read: (c) => c.details?.diamondType },
   { key: "dia_qly", name: "Dia Quality", read: (c) => c.details?.diaQly },
   { key: "dia_clr", name: "Dia Color", read: (c) => c.details?.diaClr },

@@ -13,6 +13,7 @@ import type { ShopifyAdminClient } from "./client";
 import {
   buildVariantMetafields,
   DEVJEWELS_METAFIELD_NAMESPACE,
+  METAL_COLOR_WORDS,
   type ShopifyMetafieldInput,
 } from "./variantMetafieldSchema";
 import { ShopifyHttpError } from "./client";
@@ -151,12 +152,6 @@ const LEGACY_JOB_OPTION = "Job";
 const DEFAULT_OPTION = "Title";
 const OPTION_VALUE_MAX = 255;
 
-const COLOR_WORD: Record<string, string> = {
-  w: "White",
-  y: "Yellow",
-  r: "Rose",
-};
-
 function displayToken(raw: string): string {
   return raw
     .trim()
@@ -164,7 +159,7 @@ function displayToken(raw: string): string {
     .map((word) => {
       if (!word) return "";
       if (word.length === 1) {
-        const mapped = COLOR_WORD[word.toLowerCase()];
+        const mapped = METAL_COLOR_WORDS[word.toLowerCase()];
         if (mapped) return mapped;
       }
       if (/\d/.test(word)) return word.toUpperCase();
