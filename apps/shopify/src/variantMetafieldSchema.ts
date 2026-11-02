@@ -8,6 +8,11 @@
  * with no value is an empty field in the merchant's admin.
  *
  * Labels match the DevJewels customer stock table column for column.
+ *
+ * Never write DevJewels unit price/cost as a metafield: Shopify Liquid can still
+ * read values even when definition storefront access is NONE. Wholesale cost
+ * stays on `inventoryItem.cost` (Admin); selling price is the Shopify variant
+ * price (merchant-owned unless content sync is on).
  */
 import type { ChannelJobVariantDetails } from "@devjewels-channels/core/channels/types";
 
@@ -17,6 +22,9 @@ export const DEVJEWELS_METAFIELD_NAMESPACE = "devjewels";
 export const VARIANT_METAFIELD_OWNER_TYPE = "PRODUCTVARIANT";
 
 export const VARIANT_METAFIELD_TYPE = "single_line_text_field";
+
+/** Shopify Storefront API / Liquid visibility for a definition. */
+export type VariantMetafieldStorefrontAccess = "PUBLIC_READ" | "NONE";
 
 /** Shopify caps a single_line_text_field at 255 characters. */
 const VALUE_MAX = 255;
@@ -48,26 +56,91 @@ export type VariantMetafieldField = {
   key: string;
   /** Merchant-facing label in Shopify admin — the stock table column name. */
   name: string;
+  /**
+   * PUBLIC_READ = theme/Liquid may show it.
+   * NONE = Admin API / merchant backend only (never the public website).
+   */
+  storefrontAccess: VariantMetafieldStorefrontAccess;
   read: (ctx: VariantMetafieldContext) => string | undefined;
 };
 
 export const VARIANT_METAFIELD_FIELDS: VariantMetafieldField[] = [
-  { key: "job_no", name: "Job No", read: (c) => c.jobNo },
-  { key: "design_no", name: "Design No", read: (c) => c.designNo },
-  { key: "metal", name: "Metal", read: (c) => c.details?.metal },
-  { key: "purity", name: "Quality", read: (c) => c.details?.purity },
-  { key: "color", name: "Color", read: (c) => metalColorWord(c.details?.color) },
-  { key: "diamond_type", name: "Type", read: (c) => c.details?.diamondType },
-  { key: "dia_qly", name: "Dia Quality", read: (c) => c.details?.diaQly },
-  { key: "dia_clr", name: "Dia Color", read: (c) => c.details?.diaClr },
-  { key: "gwt", name: "Gold WT", read: (c) => c.details?.gwt },
-  { key: "nwt", name: "Net WT", read: (c) => c.details?.nwt },
-  { key: "dwt", name: "Diamond WT", read: (c) => c.details?.dwt },
-  { key: "swt", name: "Stone WT", read: (c) => c.details?.swt },
-  { key: "size", name: "Size", read: (c) => c.details?.size },
-  { key: "store", name: "Store", read: (c) => c.details?.store },
-  { key: "category", name: "Category", read: (c) => c.details?.category },
-  { key: "certificate", name: "Certificate", read: (c) => c.details?.certificate },
+  { key: "job_no", name: "Job No", storefrontAccess: "PUBLIC_READ", read: (c) => c.jobNo },
+  {
+    key: "design_no",
+    name: "Design No",
+    storefrontAccess: "PUBLIC_READ",
+    read: (c) => c.designNo,
+  },
+  {
+    key: "metal",
+    name: "Metal",
+    storefrontAccess: "PUBLIC_READ",
+    read: (c) => c.details?.metal,
+  },
+  {
+    key: "purity",
+    name: "Quality",
+    storefrontAccess: "PUBLIC_READ",
+    read: (c) => c.details?.purity,
+  },
+  {
+    key: "color",
+    name: "Color",
+    storefrontAccess: "PUBLIC_READ",
+    read: (c) => metalColorWord(c.details?.color),
+  },
+  {
+    key: "diamond_type",
+    name: "Type",
+    storefrontAccess: "PUBLIC_READ",
+    read: (c) => c.details?.diamondType,
+  },
+  {
+    key: "dia_qly",
+    name: "Dia Quality",
+    storefrontAccess: "PUBLIC_READ",
+    read: (c) => c.details?.diaQly,
+  },
+  {
+    key: "dia_clr",
+    name: "Dia Color",
+    storefrontAccess: "PUBLIC_READ",
+    read: (c) => c.details?.diaClr,
+  },
+  { key: "gwt", name: "Gold WT", storefrontAccess: "PUBLIC_READ", read: (c) => c.details?.gwt },
+  { key: "nwt", name: "Net WT", storefrontAccess: "PUBLIC_READ", read: (c) => c.details?.nwt },
+  {
+    key: "dwt",
+    name: "Diamond WT",
+    storefrontAccess: "PUBLIC_READ",
+    read: (c) => c.details?.dwt,
+  },
+  {
+    key: "swt",
+    name: "Stone WT",
+    storefrontAccess: "PUBLIC_READ",
+    read: (c) => c.details?.swt,
+  },
+  { key: "size", name: "Size", storefrontAccess: "PUBLIC_READ", read: (c) => c.details?.size },
+  {
+    key: "store",
+    name: "Store",
+    storefrontAccess: "PUBLIC_READ",
+    read: (c) => c.details?.store,
+  },
+  {
+    key: "category",
+    name: "Category",
+    storefrontAccess: "PUBLIC_READ",
+    read: (c) => c.details?.category,
+  },
+  {
+    key: "certificate",
+    name: "Certificate",
+    storefrontAccess: "PUBLIC_READ",
+    read: (c) => c.details?.certificate,
+  },
 ];
 
 export type ShopifyMetafieldInput = {

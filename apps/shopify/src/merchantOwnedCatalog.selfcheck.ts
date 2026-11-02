@@ -304,6 +304,19 @@ async function main(): Promise<void> {
     ["job_no", "metal", "purity", "color"].every((k) => refreshedKeys.includes(k)),
     refreshedKeys.join(", "),
   );
+  check(
+    "metafield refresh never writes unit price (Liquid leak) and never Shopify selling price",
+    !refreshedKeys.includes("price") && offUpdates.every((v) => !("price" in v)),
+    refreshedKeys.join(", "),
+  );
+  check(
+    "content sync off never sends a title rewrite (merchant name stays theirs)",
+    !off.calls.some(
+      (c) =>
+        c.op === "productUpdate" &&
+        "title" in ((c.variables.product ?? {}) as Record<string, unknown>),
+    ),
+  );
 
   const soldOut = merchantProduct();
   const soldResult = await updateShopifyProduct(

@@ -7,6 +7,9 @@
  * access is Shopify's supported route, and it also surfaces the fields in the
  * merchant's admin instead of leaving them as hidden blobs.
  *
+ * Never declare a unit-price metafield: Liquid can still read metafield values
+ * even when storefront access is NONE. Wholesale stays on inventoryItem.cost.
+ *
  * Run at connect and again at catalog import: creating a definition that is
  * already there is a no-op, so an already-connected shop heals on its next
  * import without anyone touching it.
@@ -17,14 +20,17 @@ import {
   VARIANT_METAFIELD_FIELDS,
   VARIANT_METAFIELD_OWNER_TYPE,
   VARIANT_METAFIELD_TYPE,
+  type VariantMetafieldStorefrontAccess,
 } from "./variantMetafieldSchema";
 
 /**
- * Readable in a theme. `devjewels` is a plain namespace, not an app-reserved
- * `$app:` one, so the definitions are merchant-owned and Shopify rejects an
- * `access.admin` on them — storefront access is the only setting to send.
+ * `devjewels` is a plain namespace, not an app-reserved `$app:` one, so the
+ * definitions are merchant-owned and Shopify rejects `access.admin` — only
+ * `storefront` is sent (PUBLIC_READ for stock attributes).
  */
-const DEFINITION_ACCESS = { storefront: "PUBLIC_READ" } as const;
+function definitionAccess(storefront: VariantMetafieldStorefrontAccess) {
+  return { storefront } as const;
+}
 
 const METAFIELD_DEFINITION_CREATE = /* GraphQL */ `
   mutation metafieldDefinitionCreate($definition: MetafieldDefinitionInput!) {
@@ -115,6 +121,7 @@ export async function ensureShopifyVariantMetafieldDefinitions(
   };
 
   for (const field of VARIANT_METAFIELD_FIELDS) {
+    const access = definitionAccess(field.storefrontAccess);
     try {
       const created = await client.graphql<CreateData>(METAFIELD_DEFINITION_CREATE, {
         definition: {
@@ -124,7 +131,7 @@ export async function ensureShopifyVariantMetafieldDefinitions(
           type: VARIANT_METAFIELD_TYPE,
           ownerType: VARIANT_METAFIELD_OWNER_TYPE,
           description: `DevJewels live stock — ${field.name}.`,
-          access: DEFINITION_ACCESS,
+          access,
         },
       });
       if (created.errors?.length) {
@@ -144,14 +151,13 @@ export async function ensureShopifyVariantMetafieldDefinitions(
         continue;
       }
 
-      // Already defined — possibly without storefront access, which is the
-      // whole reason the details were invisible. Re-assert it.
+      // Already defined — re-assert storefront access.
       const updated = await client.graphql<UpdateData>(METAFIELD_DEFINITION_UPDATE, {
         definition: {
           namespace: DEVJEWELS_METAFIELD_NAMESPACE,
           key: field.key,
           ownerType: VARIANT_METAFIELD_OWNER_TYPE,
-          access: DEFINITION_ACCESS,
+          access,
         },
       });
       const updateErrors =

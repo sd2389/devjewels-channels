@@ -1,12 +1,14 @@
 /**
- * Assert-based check for Shopify variant metafields + description HTML.
+ * Assert-based check for Shopify variant metafields (structured stock data).
+ * Piece attributes must never depend on product description HTML.
+ * Unit price/cost must never be written as a metafield (Liquid-readable).
  */
 import {
-  jobDetailsDescriptionHtml,
   storefrontMetalLabel,
   storefrontOptionPlan,
   variantMetafields,
 } from "./products";
+import { VARIANT_METAFIELD_FIELDS } from "./variantMetafieldSchema";
 
 function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg);
@@ -34,65 +36,33 @@ export function shopifyJobDetailsSelfcheck(): void {
   assert(byKey.dia_qly === "VVS-VS", "dia_qly metafield");
   assert(byKey.gwt === "11.680 gms", "gwt metafield with unit");
   assert(byKey.dwt === "7.100 cts", "dwt metafield with unit");
+  assert(!("price" in byKey), "unit price must never be a Liquid-readable metafield");
+  assert(
+    !VARIANT_METAFIELD_FIELDS.some((f) => f.key === "price"),
+    "schema must not declare a price metafield",
+  );
+  assert(
+    VARIANT_METAFIELD_FIELDS.every((f) => f.storefrontAccess === "PUBLIC_READ"),
+    "stock attribute metafields are storefront-readable",
+  );
   assert(!("purity" in byKey), "empty purity must be omitted");
 
   const sparse = variantMetafields("DJ-1", "J1", {});
   assert(sparse.length === 2, "sparse details → only job_no + design_no");
 
-  const html = jobDetailsDescriptionHtml("DJ-1<script>", [
-    {
-      jobNo: "18375",
-      price: 100,
-      quantity: 1,
-      details: {
-        store: "NEW YORK",
-        metal: "GOLD",
-        purity: " ",
-        gwt: "11.680 gms",
-      },
-    },
-  ]);
-  assert(
-    html?.includes("<h3>In Stock (1) — DJ-1&lt;script&gt;</h3>"),
-    "design heading is escaped",
-  );
-  assert(html?.includes("<table"), "description is the stock table");
-  assert(html?.includes("<th>Job No</th>"), "each in-stock piece is a job number row");
-  assert(html?.includes("<td>18375</td>"), "job number is the piece cell");
-  assert(html?.includes("<td>Gold</td>"), "metal is title case, same words as the picker");
-  assert(!html?.includes(">GOLD<"), "raw API metal token is not written through");
-  assert(html?.includes("<th>Store</th>"), "store column when a job has a store");
-  assert(html?.includes("<td>NEW YORK</td>"), "store cell");
-  assert(html?.includes("<th>Gold WT</th>"), "gold weight column");
-  assert(html?.includes("<td>11.680 gms</td>"), "gold weight keeps its unit");
-  assert(html?.includes("<th>Quality</th>"), "quality column matches the customer table");
-  assert(html?.includes("<td>—</td>"), "blank quality cell is a dash");
-  assert(!html?.includes("<th>Type</th>"), "type column hidden when no job has a type");
-  assert(!html?.includes("<th>Purity</th>"), "quality label is not Purity");
-  assert(!html?.includes(" · "), "description must not use inline separators");
-  assert(!html?.includes("<script"), "description must not allow raw tags from values");
-  const rich = jobDetailsDescriptionHtml("DJ-2", [
-    {
-      jobNo: "18376",
-      price: 1650,
-      quantity: 1,
-      details: {
-        diamondType: "Lab Grown",
-        diaQly: "VVS-VS",
-        diaClr: "D-E-F",
-        dwt: "1.200 cts",
-        swt: "0.450 cts",
-        certificate: "GIA, 123",
-      },
-    },
-  ]);
-  assert(rich?.includes("<th>Type</th>"), "type column");
-  assert(rich?.includes("<td>Lab Grown</td>"), "type cell");
-  assert(rich?.includes("<th>Stone WT</th>"), "stone weight column");
-  assert(rich?.includes("<td>0.450 cts</td>"), "stone weight cell");
-  assert(rich?.includes("<th>Certificate</th>"), "certificate column");
-  assert(rich?.includes("<td>GIA, 123</td>"), "certificate cell");
-  assert(rich?.includes("<td>$1,650.00</td>"), "price matches the customer table");
+  const rich = variantMetafields("DJ-2", "18376", {
+    diamondType: "Lab Grown",
+    diaQly: "VVS-VS",
+    diaClr: "D-E-F",
+    dwt: "1.200 cts",
+    swt: "0.450 cts",
+    certificate: "GIA, 123",
+  });
+  const richByKey = Object.fromEntries(rich.map((f) => [f.key, f.value]));
+  assert(richByKey.diamond_type === "Lab Grown", "diamond_type metafield");
+  assert(richByKey.swt === "0.450 cts", "swt metafield");
+  assert(richByKey.certificate === "GIA, 123", "certificate metafield");
+  assert(!("price" in richByKey), "rich details must still omit price");
 
   assert(
     storefrontMetalLabel({ metal: "GOLD", purity: "14K", color: "W" }) === "14K White Gold",

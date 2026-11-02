@@ -84,6 +84,11 @@ async function main(): Promise<void> {
     written.map((m) => m.key).join(", "),
   );
   check(
+    "unit price is never written as a metafield (Liquid would expose it)",
+    !written.some((m) => m.key === "price") &&
+      !VARIANT_METAFIELD_FIELDS.some((f) => f.key === "price"),
+  );
+  check(
     "all under the devjewels namespace",
     written.every((m) => m.namespace === DEVJEWELS_METAFIELD_NAMESPACE),
   );
@@ -126,7 +131,7 @@ async function main(): Promise<void> {
     String(firstDef?.ownerType),
   );
   check(
-    "readable by the storefront — the whole point",
+    "stock attributes are readable by the storefront",
     JSON.stringify(firstDef?.access) === JSON.stringify({ storefront: "PUBLIC_READ" }),
     JSON.stringify(firstDef?.access),
   );
@@ -139,6 +144,14 @@ async function main(): Promise<void> {
     "labelled with the stock table column name",
     firstDef?.name === "Job No",
     String(firstDef?.name),
+  );
+  check(
+    "no price metafield definition is created",
+    !fresh.calls.some(
+      (c) =>
+        c.op === "metafieldDefinitionCreate" &&
+        (c.variables.definition as { key?: string })?.key === "price",
+    ),
   );
 
   console.log("re-run: a shop that already has them");
@@ -173,12 +186,12 @@ async function main(): Promise<void> {
     again.calls.some(
       (c) =>
         c.op === "metafieldDefinitionUpdate" &&
+        (c.variables.definition as { key?: string })?.key === "job_no" &&
         JSON.stringify(
           (c.variables.definition as Record<string, unknown>)?.access,
         ) === JSON.stringify({ storefront: "PUBLIC_READ" }),
     ),
   );
-
   console.log("failure: must never break a connect");
 
   const denied = fakeClient(() => ({

@@ -27,9 +27,6 @@ export const DEVJEWELS_SHOPIFY_VENDOR = "Dev Jewels Inc.";
  */
 const NEW_SHOPIFY_PRODUCT_STATUS = "DRAFT";
 
-/** Cap product description job rows (scale: avoid multi-MB HTML). */
-const DESCRIPTION_JOB_CAP = 40;
-
 function designMetafields(designNo: string) {
   return [
     {
@@ -41,108 +38,17 @@ function designMetafields(designNo: string) {
   ];
 }
 
-/** Variant metafields for one piece — see variantMetafieldSchema for the list. */
+/**
+ * Variant metafields for one piece — see variantMetafieldSchema for the list.
+ * Stock-table attributes live here only (never product description HTML).
+ * Never writes unit price/cost (Liquid-readable even with storefront NONE).
+ */
 export function variantMetafields(
   designNo: string,
   jobNo: string,
   details?: ChannelJobVariantDetails,
 ): ShopifyMetafieldInput[] {
   return buildVariantMetafields({ designNo, jobNo, details });
-}
-
-function escapeHtml(raw: string): string {
-  return raw
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-type DescriptionColumn = {
-  label: string;
-  /** Customer stock table always shows these, even when a cell is blank. */
-  always: boolean;
-  cell: (variant: CreateProductInput["variants"][number]) => string;
-};
-
-function descriptionCell(raw: string | undefined): string {
-  return String(raw || "").trim();
-}
-
-/** Customer stock table price, e.g. 1650 → $1,650.00. */
-export function formatDescriptionPrice(amount: number): string {
-  if (!Number.isFinite(amount) || amount <= 0) return "";
-  const [whole, frac] = amount.toFixed(2).split(".");
-  return `$${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${frac}`;
-}
-
-/**
- * One row per in-stock piece, same columns as the customer stock table.
- * Job No is the piece. Metal, Quality, and Color use the same words as the picker.
- */
-const DESCRIPTION_COLUMNS: DescriptionColumn[] = [
-  { label: "Job No", always: true, cell: (v) => descriptionCell(v.jobNo) },
-  { label: "Metal", always: true, cell: (v) => displayToken(v.details?.metal || "") },
-  { label: "Quality", always: true, cell: (v) => displayToken(v.details?.purity || "") },
-  { label: "Color", always: true, cell: (v) => displayToken(v.details?.color || "") },
-  { label: "Type", always: false, cell: (v) => descriptionCell(v.details?.diamondType) },
-  { label: "Dia Quality", always: true, cell: (v) => descriptionCell(v.details?.diaQly) },
-  { label: "Dia Color", always: true, cell: (v) => descriptionCell(v.details?.diaClr) },
-  { label: "Gold WT", always: true, cell: (v) => descriptionCell(v.details?.gwt) },
-  { label: "Diamond WT", always: false, cell: (v) => descriptionCell(v.details?.dwt) },
-  { label: "Stone WT", always: false, cell: (v) => descriptionCell(v.details?.swt) },
-  { label: "Size", always: false, cell: (v) => descriptionCell(v.details?.size) },
-  { label: "Store", always: false, cell: (v) => descriptionCell(v.details?.store) },
-  {
-    label: "Certificate",
-    always: false,
-    cell: (v) => descriptionCell(v.details?.certificate),
-  },
-  { label: "Price", always: true, cell: (v) => formatDescriptionPrice(v.price) },
-];
-
-/**
- * Product description as the customer stock table: one row per job.
- * `border` is an HTML attribute so the grid still shows if a theme strips CSS.
- */
-export function jobDetailsDescriptionHtml(
-  designNo: string,
-  variants: CreateProductInput["variants"],
-): string | undefined {
-  const rows = variants.slice(0, DESCRIPTION_JOB_CAP);
-  if (!rows.length) return undefined;
-  const columns = DESCRIPTION_COLUMNS.filter(
-    (column) => column.always || rows.some((row) => column.cell(row)),
-  );
-  const head = columns
-    .map((column) => `<th>${escapeHtml(column.label)}</th>`)
-    .join("");
-  const body = rows
-    .map((row) => {
-      const cells = columns
-        .map((column) => {
-          const value = column.cell(row);
-          return `<td>${value ? escapeHtml(value) : "—"}</td>`;
-        })
-        .join("");
-      return `<tr>${cells}</tr>`;
-    })
-    .join("\n");
-  const more =
-    variants.length > DESCRIPTION_JOB_CAP
-      ? `\n<p>+${variants.length - DESCRIPTION_JOB_CAP} more pieces are in stock.</p>`
-      : "";
-  const countLabel =
-    variants.length > DESCRIPTION_JOB_CAP
-      ? `${rows.length} of ${variants.length}`
-      : String(rows.length);
-  return `<h3>In Stock (${countLabel}) — ${escapeHtml(designNo)}</h3>
-<table border="1" cellpadding="6" cellspacing="0">
-<thead><tr>${head}</tr></thead>
-<tbody>
-${body}
-</tbody>
-</table>${more}`;
 }
 
 /** Customer-facing variant option. Legacy syncs used "Job" (the job number). */
@@ -976,14 +882,13 @@ export async function createShopifyProduct(
   // One piece keeps Shopify's default Title variant so the theme hides the picker.
   // Two or more pieces get one Metal option (14K White Gold, …). Job number stays on SKU.
   const plan = storefrontOptionPlan(input.variants);
-  const descriptionHtml = jobDetailsDescriptionHtml(input.designNo, input.variants);
+  // Piece attributes are variant metafields only — never description HTML.
   const result = await client.graphql<ProductCreateData>(PRODUCT_CREATE, {
     product: {
       title: input.title || input.designNo,
       vendor: DEVJEWELS_SHOPIFY_VENDOR,
       status: NEW_SHOPIFY_PRODUCT_STATUS,
       metafields: designMetafields(input.designNo),
-      ...(descriptionHtml ? { descriptionHtml } : {}),
       ...shopifyTaxonomyFields(input),
       ...(plan
         ? {
@@ -1356,8 +1261,8 @@ export async function syncShopifyLiveStockVariants(
   // Refresh the piece details on pieces already there. These are DevJewels
   // facts (certificate, weights, dia quality), so a correction upstream has to
   // reach the storefront; without this they were written once at add time and
-  // then went stale forever. Metafields only — no price, no SKU, nothing the
-  // merchant owns.
+  // then went stale forever. Metafields only — never Shopify variant selling
+  // price / SKU / unit cost (merchant-owned or Admin-only inventory cost).
   const detailUpdates = plan.keep
     .map(({ jobNo, variant }) => {
       const job = input.variants.find((v) => jobKey(v.jobNo) === jobKey(jobNo));
@@ -1567,14 +1472,15 @@ export async function updateShopifyProduct(
   }
   const existingByJob = indexLiveByJob(live, input.variants);
 
-  const descriptionHtml = jobDetailsDescriptionHtml(input.designNo, input.variants);
+  // Piece attributes are variant metafields only. Clear description so any
+  // legacy stock-table HTML from earlier syncs is not left as fake "content".
   const updateResult = await client.graphql<ProductUpdateData>(PRODUCT_UPDATE, {
     product: {
       id: productId,
       title: input.title || input.designNo,
       vendor: DEVJEWELS_SHOPIFY_VENDOR,
+      descriptionHtml: "",
       metafields: designMetafields(input.designNo),
-      ...(descriptionHtml ? { descriptionHtml } : {}),
       ...shopifyTaxonomyFields(input),
     },
   });
