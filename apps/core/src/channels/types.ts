@@ -7,7 +7,7 @@ export type DesignJobKey = {
   jobNo: string;
 };
 
-/** Merchant-visible job details (Shopify variant metafields / description). */
+/** Merchant-visible job details (Shopify variant metafields only). */
 export type ChannelJobVariantDetails = {
   store?: string;
   category?: string;
@@ -95,7 +95,7 @@ export type CreateProductInput = {
     /** DevJewels wholesale cost for inventoryItem.cost. Never the selling price. */
     wholesaleCost?: number;
     quantity: number;
-    /** Live stock attributes for Shopify metafields / description. */
+    /** Live stock attributes for Shopify variant metafields. */
     details?: ChannelJobVariantDetails;
   }>;
 };
