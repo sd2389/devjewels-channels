@@ -46,19 +46,24 @@ function fakeClient(reply: (op: string, vars: Record<string, unknown>) => unknow
 async function main(): Promise<void> {
   console.log("schema: definitions and values stay in step");
 
-  const written = variantMetafields("DE-093", "37471", {
-    metal: "Gold",
-    purity: "14K",
-    color: "Y",
-    diamondType: "Lab Grown",
-    diaQly: "VVS2",
-    diaClr: "FANCY INTENCE YELLOW",
-    gwt: "2.37",
-    dwt: "3.09",
-    size: "NO CHAIN",
-    store: "JIS",
-    certificate: "LG804670094",
-  });
+  const written = variantMetafields(
+    "DE-093",
+    "37471",
+    {
+      metal: "Gold",
+      purity: "14K",
+      color: "Y",
+      diamondType: "Lab Grown",
+      diaQly: "VVS2",
+      diaClr: "FANCY INTENCE YELLOW",
+      gwt: "2.37",
+      dwt: "3.09",
+      size: "NO CHAIN",
+      store: "JIS",
+      certificate: "LG804670094",
+    },
+    1650,
+  );
   const defined = new Set(VARIANT_METAFIELD_FIELDS.map((f) => f.key));
   check(
     "every value written has a definition behind it",
@@ -80,6 +85,7 @@ async function main(): Promise<void> {
       "size",
       "store",
       "certificate",
+      "price",
     ].every((k) => written.some((m) => m.key === k)),
     written.map((m) => m.key).join(", "),
   );
@@ -126,7 +132,7 @@ async function main(): Promise<void> {
     String(firstDef?.ownerType),
   );
   check(
-    "readable by the storefront — the whole point",
+    "stock attributes are readable by the storefront",
     JSON.stringify(firstDef?.access) === JSON.stringify({ storefront: "PUBLIC_READ" }),
     JSON.stringify(firstDef?.access),
   );
@@ -139,6 +145,22 @@ async function main(): Promise<void> {
     "labelled with the stock table column name",
     firstDef?.name === "Job No",
     String(firstDef?.name),
+  );
+  const priceCreate = fresh.calls.find(
+    (c) =>
+      c.op === "metafieldDefinitionCreate" &&
+      (c.variables.definition as { key?: string })?.key === "price",
+  );
+  check(
+    "unit price metafield is never storefront-readable (no cost leak to shoppers)",
+    JSON.stringify((priceCreate?.variables.definition as { access?: unknown })?.access) ===
+      JSON.stringify({ storefront: "NONE" }),
+    JSON.stringify(priceCreate?.variables.definition),
+  );
+  check(
+    "schema marks only price as storefront NONE",
+    VARIANT_METAFIELD_FIELDS.filter((f) => f.storefrontAccess === "NONE").map((f) => f.key).join() ===
+      "price",
   );
 
   console.log("re-run: a shop that already has them");
@@ -173,9 +195,21 @@ async function main(): Promise<void> {
     again.calls.some(
       (c) =>
         c.op === "metafieldDefinitionUpdate" &&
+        (c.variables.definition as { key?: string })?.key === "job_no" &&
         JSON.stringify(
           (c.variables.definition as Record<string, unknown>)?.access,
         ) === JSON.stringify({ storefront: "PUBLIC_READ" }),
+    ),
+  );
+  check(
+    "price storefront NONE is re-asserted (heals a prior PUBLIC_READ leak)",
+    again.calls.some(
+      (c) =>
+        c.op === "metafieldDefinitionUpdate" &&
+        (c.variables.definition as { key?: string })?.key === "price" &&
+        JSON.stringify(
+          (c.variables.definition as Record<string, unknown>)?.access,
+        ) === JSON.stringify({ storefront: "NONE" }),
     ),
   );
 

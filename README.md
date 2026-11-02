@@ -70,7 +70,8 @@ is **FALSE for every shop by default**.
 
 | | `sync_product_content = false` (default) | `= true` (opt in) |
 |---|---|---|
-| Product title, description, tags, product type | never written | written from the design |
+| Product title, tags, product type | never written | written from the design |
+| Product description HTML | never written (piece data is metafields only) | never written (piece data is metafields only) |
 | Selling price of a variant already on the product | never written | written (cost + markup) |
 | Images / media | never written | replaced from the design |
 | Product status (active / draft) | never written | never written |
@@ -109,10 +110,12 @@ UPDATE channels.connection SET sync_product_content = TRUE WHERE id = '<uuid>';
 
 ### Piece details on the storefront
 
-Every piece carries its stock-table row as variant metafields in namespace
-`devjewels`: `job_no` `design_no` `metal` `purity` `color` `diamond_type`
-`dia_qly` `dia_clr` `gwt` `nwt` `dwt` `swt` `size` `store` `category`
-`certificate`.
+Every piece carries its stock-table row as **variant metafields only** (never
+product description HTML — that was unparseable for merchant/customer tooling).
+Namespace `devjewels`: `job_no` `design_no` `metal` `purity` `color`
+`diamond_type` `dia_qly` `dia_clr` `gwt` `nwt` `dwt` `swt` `size` `store`
+`category` `certificate` (storefront-readable) + `price` (Admin-only plain
+decimal, e.g. `1650.00`).
 
 The list lives in `apps/shopify/src/variantMetafieldSchema.ts` and feeds both
 writers, so values and definitions cannot drift apart:
@@ -131,11 +134,25 @@ is best effort — it is logged as `shopify_metafield_definitions_ensured` and
 never fails a connect or an import. `write_products` already covers it, so no
 merchant re-authorization is needed.
 
-A theme reads them per variant:
+### Storefront leak rules (hard)
+
+DevJewels sync must not accidentally publish internal pricing or overwrite the
+merchant’s storefront copy:
+
+| Concern | Rule |
+|---|---|
+| **Unit price / cost** | `devjewels.price` metafield is **Admin-only** (`storefront: NONE`). Wholesale cost goes to Shopify `inventoryItem.cost` (never Liquid). Shoppers must never see DevJewels cost/unit price via the theme. |
+| **Shopify selling price** | Never rewritten unless `sync_product_content = true`. New pieces inherit the merchant’s existing design price. |
+| **Title / name / tags / images** | Never rewritten unless `sync_product_content = true`. First create is **DRAFT** so nothing goes live until the merchant publishes. |
+| **Description HTML** | Never used for piece data (metafields only). |
+
+`devjewels.price` is for Admin API / merchant tooling parsers only. A theme may
+read stock attributes, not price:
 
 ```liquid
 {{ variant.metafields.devjewels.dia_qly }}
 {{ variant.metafields.devjewels.certificate }}
+{% comment %} price is storefront:NONE — not available in Liquid {% endcomment %}
 ```
 
 A detail the job does not carry is omitted rather than written blank (Shopify
