@@ -41,20 +41,14 @@ function designMetafields(designNo: string) {
 /**
  * Variant metafields for one piece — see variantMetafieldSchema for the list.
  * Stock-table attributes live here only (never product description HTML).
+ * Never writes unit price/cost (Liquid-readable even with storefront NONE).
  */
 export function variantMetafields(
   designNo: string,
   jobNo: string,
   details?: ChannelJobVariantDetails,
-  price?: number,
 ): ShopifyMetafieldInput[] {
-  return buildVariantMetafields({ designNo, jobNo, details, price });
-}
-
-/** Channel unit price as a plain decimal for metafields (machine-parseable). */
-export function formatMetafieldPrice(amount: number): string {
-  if (!Number.isFinite(amount) || amount <= 0) return "";
-  return amount.toFixed(2);
+  return buildVariantMetafields({ designNo, jobNo, details });
 }
 
 /** Customer-facing variant option. Legacy syncs used "Job" (the job number). */
@@ -196,7 +190,7 @@ function bulkVariantInput(
   return {
     price: String(v.price),
     inventoryItem: { sku: v.sku || v.jobNo },
-    metafields: variantMetafields(designNo, v.jobNo, v.details, v.price),
+    metafields: variantMetafields(designNo, v.jobNo, v.details),
     ...(option
       ? { optionValues: [{ optionName: option.name, name: option.value }] }
       : {}),
@@ -1265,20 +1259,15 @@ export async function syncShopifyLiveStockVariants(
   }
 
   // Refresh the piece details on pieces already there. These are DevJewels
-  // facts (certificate, weights, dia quality, channel price), so a correction
-  // upstream has to reach the storefront; without this they were written once
-  // at add time and then went stale forever. Metafields only — never Shopify
-  // variant selling price / SKU (merchant-owned).
+  // facts (certificate, weights, dia quality), so a correction upstream has to
+  // reach the storefront; without this they were written once at add time and
+  // then went stale forever. Metafields only — never Shopify variant selling
+  // price / SKU / unit cost (merchant-owned or Admin-only inventory cost).
   const detailUpdates = plan.keep
     .map(({ jobNo, variant }) => {
       const job = input.variants.find((v) => jobKey(v.jobNo) === jobKey(jobNo));
       if (!job) return null;
-      const metafields = variantMetafields(
-        input.designNo,
-        job.jobNo,
-        job.details,
-        job.price,
-      );
+      const metafields = variantMetafields(input.designNo, job.jobNo, job.details);
       if (!metafields.length) return null;
       return { id: variant.externalVariantId, metafields };
     })
@@ -1385,12 +1374,7 @@ export async function syncShopifyLiveStockVariants(
           variants: creatable.map(({ job, optionValues }) => ({
             price,
             inventoryItem: { sku: job.sku || job.jobNo },
-            metafields: variantMetafields(
-              input.designNo,
-              job.jobNo,
-              job.details,
-              job.price,
-            ),
+            metafields: variantMetafields(input.designNo, job.jobNo, job.details),
             ...(optionValues.length ? { optionValues } : {}),
           })),
         },

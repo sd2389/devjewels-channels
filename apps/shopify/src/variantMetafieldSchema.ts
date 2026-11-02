@@ -9,8 +9,10 @@
  *
  * Labels match the DevJewels customer stock table column for column.
  *
- * Storefront access is per field: shoppers may see stock attributes, never
- * DevJewels unit price/cost (that stays Admin API only).
+ * Never write DevJewels unit price/cost as a metafield: Shopify Liquid can still
+ * read values even when definition storefront access is NONE. Wholesale cost
+ * stays on `inventoryItem.cost` (Admin); selling price is the Shopify variant
+ * price (merchant-owned unless content sync is on).
  */
 import type { ChannelJobVariantDetails } from "@devjewels-channels/core/channels/types";
 
@@ -48,11 +50,6 @@ export type VariantMetafieldContext = {
   designNo: string;
   jobNo: string;
   details?: ChannelJobVariantDetails;
-  /**
-   * Channel unit price (DevJewels funnel + markup). Written for Admin parsers
-   * only — definition storefront access is NONE so shoppers never see it.
-   */
-  price?: number;
 };
 
 export type VariantMetafieldField = {
@@ -143,17 +140,6 @@ export const VARIANT_METAFIELD_FIELDS: VariantMetafieldField[] = [
     name: "Certificate",
     storefrontAccess: "PUBLIC_READ",
     read: (c) => c.details?.certificate,
-  },
-  {
-    key: "price",
-    name: "Price",
-    // Never Liquid/Storefront — merchants' shoppers must not see DevJewels unit price.
-    storefrontAccess: "NONE",
-    read: (c) => {
-      const amount = c.price;
-      if (amount == null || !Number.isFinite(amount) || amount <= 0) return undefined;
-      return amount.toFixed(2);
-    },
   },
 ];
 

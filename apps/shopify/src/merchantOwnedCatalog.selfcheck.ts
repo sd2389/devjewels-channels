@@ -305,8 +305,8 @@ async function main(): Promise<void> {
     refreshedKeys.join(", "),
   );
   check(
-    "unit price metafield may refresh, but Shopify selling price is never rewritten",
-    refreshedKeys.includes("price") && offUpdates.every((v) => !("price" in v)),
+    "metafield refresh never writes unit price (Liquid leak) and never Shopify selling price",
+    !refreshedKeys.includes("price") && offUpdates.every((v) => !("price" in v)),
     refreshedKeys.join(", "),
   );
   check(

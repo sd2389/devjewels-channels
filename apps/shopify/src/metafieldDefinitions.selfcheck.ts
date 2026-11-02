@@ -46,24 +46,19 @@ function fakeClient(reply: (op: string, vars: Record<string, unknown>) => unknow
 async function main(): Promise<void> {
   console.log("schema: definitions and values stay in step");
 
-  const written = variantMetafields(
-    "DE-093",
-    "37471",
-    {
-      metal: "Gold",
-      purity: "14K",
-      color: "Y",
-      diamondType: "Lab Grown",
-      diaQly: "VVS2",
-      diaClr: "FANCY INTENCE YELLOW",
-      gwt: "2.37",
-      dwt: "3.09",
-      size: "NO CHAIN",
-      store: "JIS",
-      certificate: "LG804670094",
-    },
-    1650,
-  );
+  const written = variantMetafields("DE-093", "37471", {
+    metal: "Gold",
+    purity: "14K",
+    color: "Y",
+    diamondType: "Lab Grown",
+    diaQly: "VVS2",
+    diaClr: "FANCY INTENCE YELLOW",
+    gwt: "2.37",
+    dwt: "3.09",
+    size: "NO CHAIN",
+    store: "JIS",
+    certificate: "LG804670094",
+  });
   const defined = new Set(VARIANT_METAFIELD_FIELDS.map((f) => f.key));
   check(
     "every value written has a definition behind it",
@@ -85,9 +80,13 @@ async function main(): Promise<void> {
       "size",
       "store",
       "certificate",
-      "price",
     ].every((k) => written.some((m) => m.key === k)),
     written.map((m) => m.key).join(", "),
+  );
+  check(
+    "unit price is never written as a metafield (Liquid would expose it)",
+    !written.some((m) => m.key === "price") &&
+      !VARIANT_METAFIELD_FIELDS.some((f) => f.key === "price"),
   );
   check(
     "all under the devjewels namespace",
@@ -146,21 +145,13 @@ async function main(): Promise<void> {
     firstDef?.name === "Job No",
     String(firstDef?.name),
   );
-  const priceCreate = fresh.calls.find(
-    (c) =>
-      c.op === "metafieldDefinitionCreate" &&
-      (c.variables.definition as { key?: string })?.key === "price",
-  );
   check(
-    "unit price metafield is never storefront-readable (no cost leak to shoppers)",
-    JSON.stringify((priceCreate?.variables.definition as { access?: unknown })?.access) ===
-      JSON.stringify({ storefront: "NONE" }),
-    JSON.stringify(priceCreate?.variables.definition),
-  );
-  check(
-    "schema marks only price as storefront NONE",
-    VARIANT_METAFIELD_FIELDS.filter((f) => f.storefrontAccess === "NONE").map((f) => f.key).join() ===
-      "price",
+    "no price metafield definition is created",
+    !fresh.calls.some(
+      (c) =>
+        c.op === "metafieldDefinitionCreate" &&
+        (c.variables.definition as { key?: string })?.key === "price",
+    ),
   );
 
   console.log("re-run: a shop that already has them");
@@ -201,18 +192,6 @@ async function main(): Promise<void> {
         ) === JSON.stringify({ storefront: "PUBLIC_READ" }),
     ),
   );
-  check(
-    "price storefront NONE is re-asserted (heals a prior PUBLIC_READ leak)",
-    again.calls.some(
-      (c) =>
-        c.op === "metafieldDefinitionUpdate" &&
-        (c.variables.definition as { key?: string })?.key === "price" &&
-        JSON.stringify(
-          (c.variables.definition as Record<string, unknown>)?.access,
-        ) === JSON.stringify({ storefront: "NONE" }),
-    ),
-  );
-
   console.log("failure: must never break a connect");
 
   const denied = fakeClient(() => ({

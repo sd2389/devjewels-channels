@@ -7,8 +7,8 @@
  * access is Shopify's supported route, and it also surfaces the fields in the
  * merchant's admin instead of leaving them as hidden blobs.
  *
- * Pricing stays `storefront: NONE` — Admin API parsers can still read it; the
- * merchant's shoppers must never see DevJewels unit price/cost via Liquid.
+ * Never declare a unit-price metafield: Liquid can still read metafield values
+ * even when storefront access is NONE. Wholesale stays on inventoryItem.cost.
  *
  * Run at connect and again at catalog import: creating a definition that is
  * already there is a no-op, so an already-connected shop heals on its next
@@ -26,7 +26,7 @@ import {
 /**
  * `devjewels` is a plain namespace, not an app-reserved `$app:` one, so the
  * definitions are merchant-owned and Shopify rejects `access.admin` — only
- * `storefront` is sent (PUBLIC_READ for attributes, NONE for price).
+ * `storefront` is sent (PUBLIC_READ for stock attributes).
  */
 function definitionAccess(storefront: VariantMetafieldStorefrontAccess) {
   return { storefront } as const;
@@ -151,7 +151,7 @@ export async function ensureShopifyVariantMetafieldDefinitions(
         continue;
       }
 
-      // Already defined — re-assert access (e.g. heal price that was PUBLIC_READ).
+      // Already defined — re-assert storefront access.
       const updated = await client.graphql<UpdateData>(METAFIELD_DEFINITION_UPDATE, {
         definition: {
           namespace: DEVJEWELS_METAFIELD_NAMESPACE,
