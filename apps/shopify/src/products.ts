@@ -11,6 +11,7 @@ import type {
 } from "@devjewels-channels/core/channels/types";
 import type { ShopifyAdminClient } from "./client";
 import {
+  buildProductMetafields,
   buildVariantMetafields,
   DEVJEWELS_METAFIELD_NAMESPACE,
   METAL_COLOR_WORDS,
@@ -27,15 +28,21 @@ export const DEVJEWELS_SHOPIFY_VENDOR = "Dev Jewels Inc.";
  */
 const NEW_SHOPIFY_PRODUCT_STATUS = "DRAFT";
 
-function designMetafields(designNo: string) {
-  return [
-    {
-      namespace: DEVJEWELS_METAFIELD_NAMESPACE,
-      key: "design_no",
-      type: "single_line_text_field",
-      value: designNo,
-    },
-  ];
+/**
+ * The design's product-level details — see variantMetafieldSchema for the list.
+ * Summarised from the live pieces only: the out-of-stock design_no placeholder
+ * is not a piece, so it never shapes what the product says.
+ */
+function designMetafields(
+  designNo: string,
+  variants: Array<{ jobNo: string; details?: ChannelJobVariantDetails }>,
+) {
+  return buildProductMetafields({
+    designNo,
+    pieces: variants
+      .filter((v) => v.details && jobKey(v.jobNo) !== jobKey(designNo))
+      .map((v) => v.details as ChannelJobVariantDetails),
+  });
 }
 
 /**
@@ -91,11 +98,23 @@ export function storefrontMetalLabel(details?: {
 }): string {
   const metal = displayToken(details?.metal || "");
   const purity = displayToken(details?.purity || "");
-  const color = displayToken(details?.color || "");
+  // Platinum has no colour: a "W" on a platinum job is not "White Platinum".
+  const color = /platinum/i.test(metal) ? "" : displayToken(details?.color || "");
   if (!metal && !purity && !color) return "";
   const colorInMetal =
     color.length > 0 && metal.toLowerCase().includes(color.toLowerCase());
   return [purity, colorInMetal ? "" : color, metal].filter(Boolean).join(" ");
+}
+
+/**
+ * The metal without its karat, for a merchant who splits the picker into
+ * "Metal Type" and "Karat": "White Gold", "Rose Gold", "Platinum".
+ */
+export function storefrontMetalTypeLabel(details?: {
+  metal?: string;
+  color?: string;
+}): string {
+  return storefrontMetalLabel({ metal: details?.metal, color: details?.color });
 }
 
 /**
@@ -236,6 +255,34 @@ const PRODUCT_UPDATE = /* GraphQL */ `
   }
 `;
 
+const METAFIELDS_SET = /* GraphQL */ `
+  mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+    metafieldsSet(metafields: $metafields) {
+      metafields {
+        key
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+const METAFIELDS_DELETE = /* GraphQL */ `
+  mutation metafieldsDelete($metafields: [MetafieldIdentifierInput!]!) {
+    metafieldsDelete(metafields: $metafields) {
+      deletedMetafields {
+        key
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
 const PRODUCT_VARIANTS_BULK_UPDATE = /* GraphQL */ `
   mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
     productVariantsBulkUpdate(productId: $productId, variants: $variants) {
@@ -346,6 +393,50 @@ function throwGraphqlErrors(
     502,
     errors.map((e) => e.message).join("; ") || "Shopify GraphQL errors",
   );
+}
+
+type MetafieldsWriteData = {
+  metafieldsSet?: {
+    userErrors?: Array<{ field?: string[]; message: string }>;
+  };
+  metafieldsDelete?: {
+    userErrors?: Array<{ field?: string[]; message: string }>;
+  };
+};
+
+/**
+ * Write the product-level details through metafieldsSet, which touches only the
+ * devjewels keys it names — never title, description, status or media — so it
+ * is safe on a product the merchant owns. Keys no live piece carries any more
+ * are deleted so the product cannot keep advertising a sold piece's metal.
+ */
+async function writeShopifyProductDetails(
+  client: ShopifyAdminClient,
+  productId: string,
+  input: {
+    designNo: string;
+    variants: Array<{ jobNo: string; details?: ChannelJobVariantDetails }>;
+  },
+): Promise<void> {
+  const { set, clear } = designMetafields(input.designNo, input.variants);
+  if (set.length) {
+    const written = await client.graphql<MetafieldsWriteData>(METAFIELDS_SET, {
+      metafields: set.map((m) => ({ ...m, ownerId: productId })),
+    });
+    throwGraphqlErrors(written.errors);
+    throwUserErrors(written.data?.metafieldsSet?.userErrors, "metafieldsSet");
+  }
+  if (clear.length) {
+    const cleared = await client.graphql<MetafieldsWriteData>(METAFIELDS_DELETE, {
+      metafields: clear.map((key) => ({
+        ownerId: productId,
+        namespace: DEVJEWELS_METAFIELD_NAMESPACE,
+        key,
+      })),
+    });
+    throwGraphqlErrors(cleared.errors);
+    throwUserErrors(cleared.data?.metafieldsDelete?.userErrors, "metafieldsDelete");
+  }
 }
 
 function matchVariants(
@@ -882,13 +973,13 @@ export async function createShopifyProduct(
   // One piece keeps Shopify's default Title variant so the theme hides the picker.
   // Two or more pieces get one Metal option (14K White Gold, …). Job number stays on SKU.
   const plan = storefrontOptionPlan(input.variants);
-  // Piece attributes are variant metafields only — never description HTML.
+  // Piece attributes are metafields only — never description HTML.
   const result = await client.graphql<ProductCreateData>(PRODUCT_CREATE, {
     product: {
       title: input.title || input.designNo,
       vendor: DEVJEWELS_SHOPIFY_VENDOR,
       status: NEW_SHOPIFY_PRODUCT_STATUS,
-      metafields: designMetafields(input.designNo),
+      metafields: designMetafields(input.designNo, input.variants).set,
       ...shopifyTaxonomyFields(input),
       ...(plan
         ? {
@@ -1081,11 +1172,18 @@ const OPTION_VALUE_SOURCES: Array<{
 }> = [
   { match: /^(metal|material)$/i, pick: (d) => storefrontMetalLabel(d) },
   {
+    match: /^(metal|material)[\s_-]*(type|colou?r)$/i,
+    pick: (d) => storefrontMetalTypeLabel(d),
+  },
+  {
     match: /^(karat|carat|kt|purity|quality)$/i,
     pick: (d) => displayToken(d?.purity || ""),
   },
   { match: /^colou?r$/i, pick: (d) => displayToken(d?.color || "") },
-  { match: /^(size|length)$/i, pick: (d) => displayToken(d?.size || "") },
+  {
+    match: /^((ring|bracelet|chain)[\s_-]*)?(size|length)$/i,
+    pick: (d) => displayToken(d?.size || ""),
+  },
 ];
 
 /**
@@ -1435,6 +1533,9 @@ export async function syncShopifyLiveStockVariants(
     });
   }
 
+  // Last, so live stock lands first: the design's details table is DevJewels
+  // data in the devjewels namespace, and it follows the pieces as they sell.
+  await writeShopifyProductDetails(client, productId, input);
 
   return { externalProductId: productId, variants: resultVariants };
 }
@@ -1472,20 +1573,20 @@ export async function updateShopifyProduct(
   }
   const existingByJob = indexLiveByJob(live, input.variants);
 
-  // Piece attributes are variant metafields only. Clear description so any
-  // legacy stock-table HTML from earlier syncs is not left as fake "content".
+  // Piece attributes are metafields only. Clear description so any legacy
+  // stock-table HTML from earlier syncs is not left as fake "content".
   const updateResult = await client.graphql<ProductUpdateData>(PRODUCT_UPDATE, {
     product: {
       id: productId,
       title: input.title || input.designNo,
       vendor: DEVJEWELS_SHOPIFY_VENDOR,
       descriptionHtml: "",
-      metafields: designMetafields(input.designNo),
       ...shopifyTaxonomyFields(input),
     },
   });
   throwGraphqlErrors(updateResult.errors);
   throwUserErrors(updateResult.data?.productUpdate?.userErrors, "productUpdate");
+  await writeShopifyProductDetails(client, productId, input);
 
   const toUpdate = input.variants.filter((v) =>
     existingByJob.has(v.jobNo.trim().toUpperCase()),

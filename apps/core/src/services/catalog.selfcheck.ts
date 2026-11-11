@@ -311,6 +311,18 @@ async function main(): Promise<void> {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
+    // Product-level details (metafieldsSet / metafieldsDelete).
+    if (body.includes("metafieldsSet") || body.includes("metafieldsDelete")) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            metafieldsSet: { metafields: [], userErrors: [] },
+            metafieldsDelete: { deletedMetafields: [], userErrors: [] },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
     return new Response("unexpected", { status: 500 });
   }) as typeof fetch;
 

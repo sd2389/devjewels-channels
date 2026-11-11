@@ -330,6 +330,18 @@ function installShopifyFetch(calls: string[]): typeof fetch {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
+    // Product-level details (metafieldsSet / metafieldsDelete).
+    if (body.includes("metafieldsSet") || body.includes("metafieldsDelete")) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            metafieldsSet: { metafields: [], userErrors: [] },
+            metafieldsDelete: { deletedMetafields: [], userErrors: [] },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
     if (body.includes("productForDelete")) {
       return new Response(
         JSON.stringify({

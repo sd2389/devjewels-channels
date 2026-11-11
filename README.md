@@ -120,12 +120,34 @@ metafield (Liquid can still read `storefront: NONE` values).
 The list lives in `apps/shopify/src/variantMetafieldSchema.ts` and feeds both
 writers, so values and definitions cannot drift apart:
 
-- `variantMetafields` writes the values — on add **and** on every later sync, so
+- `variantMetafields` / `buildProductMetafields` write the values — on add **and** on every later sync, so
   a certificate added or a size corrected upstream reaches the storefront.
-- `ensureShopifyVariantMetafieldDefinitions` declares them to Shopify with
+- `ensureShopifyMetafieldDefinitions` declares them to Shopify with
   `access: { admin: MERCHANT_READ, storefront: PUBLIC_READ }`. Without a
   definition the values are stored but not reliably readable from Liquid or the
   Storefront API, which is why the details were invisible before.
+
+The product also carries the design's **details table**, for a theme that hides
+job numbers (the merchant sells the design, not one piece). Product metafields
+in the same `devjewels` namespace: `design_no` `category` `metal` `purity`
+`color` `diamond_type` `dia_qly` `dia_clr` `gwt` `nwt` `dwt` `swt` `size`,
+summarised across the live pieces — distinct values listed (`White, Yellow`),
+weights as a range (`14.13 – 14.61 gms`). Job No, Store and Certificate belong
+to one piece and stay on the variant. They are written with `metafieldsSet`,
+which touches only those keys, so this runs on every sync even when
+`sync_product_content` is off. A key no live piece carries any more is deleted;
+a sold-out design (only the design_no placeholder) keeps its last details,
+since the merchant still sells it made to order. Because these have
+`PRODUCT`-owner definitions, they show in Shopify admin's **Product metafields**
+card (labelled `DevJewels Metal`, `DevJewels Size`, … so they never sit next to a
+merchant field with the same name); the variant fields only show on each
+variant's own page.
+
+A merchant may rebuild the picker themselves. New pieces fill these option
+names from job data: `Metal` (`14K White Gold`), `Metal Type` / `Metal Color`
+(`White Gold`, `Platinum`), `Karat` / `Purity` / `Quality` (`14K`), `Color`,
+`Size` / `Ring Size` / `Length`. Any other option blocks the add and is logged as
+`shopify_live_stock_variant_options_unfillable`.
 
 Definitions are created at connect and re-asserted at catalog import, so a shop
 connected earlier heals on its next import. Creating one that already exists is
@@ -146,10 +168,11 @@ merchant’s storefront copy:
 | **Title / name / tags / images** | Never rewritten unless `sync_product_content = true`. First create is **DRAFT** so nothing goes live until the merchant publishes. |
 | **Description HTML** | Never used for piece data (metafields only). |
 
-A theme may read stock attributes:
+A theme may read the design's details, or one piece's:
 
 ```liquid
-{{ variant.metafields.devjewels.dia_qly }}
+{{ product.metafields.devjewels.metal }}
+{{ product.metafields.devjewels.dia_qly }}
 {{ variant.metafields.devjewels.certificate }}
 ```
 

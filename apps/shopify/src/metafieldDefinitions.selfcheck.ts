@@ -4,12 +4,17 @@
  * Run: npm run selfcheck:metafield-definitions -w @devjewels-channels/shopify
  */
 import type { ShopifyAdminClient } from "./client";
-import { ensureShopifyVariantMetafieldDefinitions } from "./metafieldDefinitions";
+import { ensureShopifyMetafieldDefinitions } from "./metafieldDefinitions";
 import { variantMetafields } from "./products";
 import {
+  buildProductMetafields,
   DEVJEWELS_METAFIELD_NAMESPACE,
+  PRODUCT_METAFIELD_FIELDS,
   VARIANT_METAFIELD_FIELDS,
 } from "./variantMetafieldSchema";
+
+/** Variant fields plus the product summary — one definition each. */
+const ALL_DEFINITIONS = VARIANT_METAFIELD_FIELDS.length + PRODUCT_METAFIELD_FIELDS.length;
 
 let failures = 0;
 
@@ -108,6 +113,81 @@ async function main(): Promise<void> {
     JSON.stringify(colours),
   );
 
+  console.log("product: the design's details table");
+
+  const summary = buildProductMetafields({
+    designNo: "DBG-136",
+    pieces: [
+      {
+        store: "JIS",
+        category: "Bracelet",
+        metal: "Gold",
+        purity: "14K",
+        color: "Y",
+        diaQly: "VVS-VS",
+        diaClr: "D-E-F",
+        gwt: "14.13 gms",
+        nwt: "13.102 gms",
+        dwt: "1.79 cts",
+        certificate: "LG1",
+      },
+      {
+        store: "NEW YORK",
+        category: "Bracelet",
+        metal: "Gold",
+        purity: "14K",
+        color: "W",
+        diaQly: "VVS-VS",
+        diaClr: "D-E-F",
+        gwt: "14.61 gms",
+        nwt: "13.586 gms",
+        dwt: "1.79 cts",
+        certificate: "LG2",
+      },
+    ],
+  });
+  const valueOf = (key: string) => summary.set.find((m) => m.key === key)?.value;
+  check(
+    "job no, store and certificate stay on the piece, never the product",
+    !["job_no", "store", "certificate"].some(
+      (k) => valueOf(k) !== undefined || PRODUCT_METAFIELD_FIELDS.some((f) => f.key === k),
+    ),
+    summary.set.map((m) => m.key).join(", "),
+  );
+  check("design no is on the product", valueOf("design_no") === "DBG-136", valueOf("design_no"));
+  check(
+    "shared values are written once",
+    valueOf("category") === "Bracelet" && valueOf("dia_qly") === "VVS-VS",
+    `${valueOf("category")} / ${valueOf("dia_qly")}`,
+  );
+  check(
+    "different colours are listed as words",
+    valueOf("color") === "White, Yellow",
+    valueOf("color"),
+  );
+  check(
+    "different weights become a range with one unit",
+    valueOf("gwt") === "14.13 – 14.61 gms" && valueOf("nwt") === "13.102 – 13.586 gms",
+    `${valueOf("gwt")} / ${valueOf("nwt")}`,
+  );
+  check("equal weights stay one value", valueOf("dwt") === "1.79 cts", valueOf("dwt"));
+  check(
+    "a field no piece carries is cleared, not left stale",
+    summary.clear.includes("swt") && summary.clear.includes("size"),
+    summary.clear.join(", "),
+  );
+  check(
+    "unit price is never written on the product",
+    !PRODUCT_METAFIELD_FIELDS.some((f) => f.key === "price"),
+  );
+  const soldOut = buildProductMetafields({ designNo: "DBG-136", pieces: [] });
+  check(
+    "a sold-out design keeps its last details (made to order)",
+    soldOut.clear.length === 0 &&
+      soldOut.set.map((m) => m.key).join() === "design_no",
+    JSON.stringify(soldOut),
+  );
+
   console.log("create: a fresh shop");
 
   const fresh = fakeClient(() => ({
@@ -118,11 +198,32 @@ async function main(): Promise<void> {
       },
     },
   }));
-  const freshResult = await ensureShopifyVariantMetafieldDefinitions(fresh.client);
+  const freshResult = await ensureShopifyMetafieldDefinitions(fresh.client);
   check(
     "one definition per field",
-    freshResult.created.length === VARIANT_METAFIELD_FIELDS.length,
-    `${freshResult.created.length}/${VARIANT_METAFIELD_FIELDS.length}`,
+    freshResult.created.length === ALL_DEFINITIONS,
+    `${freshResult.created.length}/${ALL_DEFINITIONS}`,
+  );
+  const productDefs = fresh.calls
+    .map((c) => c.variables.definition as Record<string, unknown>)
+    .filter((d) => d?.ownerType === "PRODUCT");
+  check(
+    "the product summary is declared on the product, so the admin card shows it",
+    productDefs.length === PRODUCT_METAFIELD_FIELDS.length &&
+      productDefs.every(
+        (d) => JSON.stringify(d.access) === JSON.stringify({ storefront: "PUBLIC_READ" }),
+      ),
+    productDefs.map((d) => d.key).join(", "),
+  );
+  check(
+    "product labels cannot be confused with the merchant's own fields",
+    productDefs.every((d) => String(d.name).startsWith("DevJewels ")),
+    productDefs.map((d) => d.name).join(", "),
+  );
+  check(
+    "variant and product keys are reported apart",
+    freshResult.created.includes("metal") && freshResult.created.includes("product.metal"),
+    freshResult.created.join(", "),
   );
   const firstDef = fresh.calls[0]?.variables.definition as Record<string, unknown>;
   check(
@@ -174,10 +275,10 @@ async function main(): Promise<void> {
           },
         },
   );
-  const againResult = await ensureShopifyVariantMetafieldDefinitions(again.client);
+  const againResult = await ensureShopifyMetafieldDefinitions(again.client);
   check(
     "an existing definition is not an error",
-    againResult.existing.length === VARIANT_METAFIELD_FIELDS.length &&
+    againResult.existing.length === ALL_DEFINITIONS &&
       Object.keys(againResult.failed).length === 0,
     JSON.stringify(againResult.failed),
   );
@@ -203,22 +304,22 @@ async function main(): Promise<void> {
       },
     },
   }));
-  const deniedResult = await ensureShopifyVariantMetafieldDefinitions(denied.client);
+  const deniedResult = await ensureShopifyMetafieldDefinitions(denied.client);
   check(
     "a missing scope is reported, not thrown",
-    Object.keys(deniedResult.failed).length === VARIANT_METAFIELD_FIELDS.length &&
+    Object.keys(deniedResult.failed).length === ALL_DEFINITIONS &&
       deniedResult.created.length === 0,
   );
 
   const exploded = fakeClient(() => {
     throw new Error("network down");
   });
-  const explodedResult = await ensureShopifyVariantMetafieldDefinitions(
+  const explodedResult = await ensureShopifyMetafieldDefinitions(
     exploded.client,
   );
   check(
     "a network failure is reported, not thrown",
-    Object.keys(explodedResult.failed).length === VARIANT_METAFIELD_FIELDS.length,
+    Object.keys(explodedResult.failed).length === ALL_DEFINITIONS,
   );
 
   if (failures > 0) {

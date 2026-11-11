@@ -309,6 +309,34 @@ async function main(): Promise<void> {
     !refreshedKeys.includes("price") && offUpdates.every((v) => !("price" in v)),
     refreshedKeys.join(", "),
   );
+  // The design's details table goes on the product through metafieldsSet,
+  // which names its devjewels keys and nothing else.
+  const productDetails = off.calls
+    .filter((c) => c.op === "metafieldsSet")
+    .flatMap(
+      (c) =>
+        (c.variables.metafields ?? []) as Array<{
+          ownerId: string;
+          namespace: string;
+          key: string;
+          value: string;
+        }>,
+    );
+  check(
+    "the product carries the design's details for a theme that hides job numbers",
+    productDetails.length > 0 &&
+      productDetails.every(
+        (m) => m.ownerId === "gid://shopify/Product/1" && m.namespace === "devjewels",
+      ) &&
+      productDetails.find((m) => m.key === "metal")?.value === "Gold" &&
+      productDetails.find((m) => m.key === "design_no")?.value === "DE-093",
+    JSON.stringify(productDetails),
+  );
+  check(
+    "the product details never carry a job number or a price",
+    !productDetails.some((m) => ["job_no", "price"].includes(m.key)),
+    productDetails.map((m) => m.key).join(", "),
+  );
   check(
     "content sync off never sends a title rewrite (merchant name stays theirs)",
     !off.calls.some(
@@ -834,6 +862,50 @@ async function main(): Promise<void> {
         { optionName: "Size", name: "6.5" },
       ]),
     JSON.stringify(fillable),
+  );
+
+  const ringSize = newVariantOptionValues(
+    {
+      options: [{ name: "Ring Size", values: [] }],
+      optionNames: ["Ring Size"],
+      variants: [],
+    } as never,
+    { jobNo: "8735", details: { size: "7" } },
+  );
+  check(
+    "a Ring Size option is filled from the job size",
+    JSON.stringify(ringSize) === JSON.stringify([{ optionName: "Ring Size", name: "7" }]),
+    JSON.stringify(ringSize),
+  );
+
+  // Buffed & Bubbly's picker: Metal Type (Rose / White / Yellow Gold, Platinum) + Karat.
+  const split = (details: Record<string, string>) =>
+    newVariantOptionValues(
+      {
+        options: [
+          { name: "Metal Type", values: [] },
+          { name: "Karat", values: [] },
+        ],
+        optionNames: ["Metal Type", "Karat"],
+        variants: [],
+      } as never,
+      { jobNo: "J1", details },
+    );
+  const roseGold = split({ metal: "GOLD", purity: "18K", color: "R" });
+  check(
+    "a Metal Type + Karat picker is filled, karat kept out of the metal",
+    JSON.stringify(roseGold) ===
+      JSON.stringify([
+        { optionName: "Metal Type", name: "Rose Gold" },
+        { optionName: "Karat", name: "18K" },
+      ]),
+    JSON.stringify(roseGold),
+  );
+  const platinum = split({ metal: "PLATINUM", purity: "950", color: "W" });
+  check(
+    "platinum reads as Platinum, not White Platinum",
+    platinum?.[0]?.name === "Platinum",
+    JSON.stringify(platinum),
   );
 
   if (failures > 0) {
