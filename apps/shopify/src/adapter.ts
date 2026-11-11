@@ -21,7 +21,7 @@ import {
   setShopifyInventoryCost,
   setShopifyInventoryLevel,
 } from "./inventory";
-import { ensureShopifyVariantMetafieldDefinitions } from "./metafieldDefinitions";
+import { ensureShopifyMetafieldDefinitions } from "./metafieldDefinitions";
 import { getShopifyMetaStore } from "./meta";
 import {
   createShopifyProduct,
@@ -55,7 +55,7 @@ export const shopifyAdapter: CommerceChannel = {
         secretRef,
         shop?.shop_domain,
       );
-      await ensureShopifyVariantMetafieldDefinitions(
+      await ensureShopifyMetafieldDefinitions(
         createShopifyClient({
           shopDomain: credentials.shopDomain,
           accessToken: credentials.accessToken,

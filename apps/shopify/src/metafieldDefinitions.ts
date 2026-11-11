@@ -17,11 +17,44 @@
 import type { ShopifyAdminClient } from "./client";
 import {
   DEVJEWELS_METAFIELD_NAMESPACE,
+  PRODUCT_METAFIELD_FIELDS,
+  PRODUCT_METAFIELD_OWNER_TYPE,
   VARIANT_METAFIELD_FIELDS,
   VARIANT_METAFIELD_OWNER_TYPE,
   VARIANT_METAFIELD_TYPE,
   type VariantMetafieldStorefrontAccess,
 } from "./variantMetafieldSchema";
+
+type DefinitionSpec = {
+  ownerType: string;
+  /** Result key: the variant key as-is, product keys as `product.<key>`. */
+  label: string;
+  key: string;
+  name: string;
+  storefrontAccess: VariantMetafieldStorefrontAccess;
+};
+
+/**
+ * Variant fields first, then the product summary. Product definitions are what
+ * put the fields in the "Product metafields" card the merchant looks at; the
+ * variant ones only show on each variant's own page.
+ */
+const DEFINITIONS: DefinitionSpec[] = [
+  ...VARIANT_METAFIELD_FIELDS.map((f) => ({
+    ownerType: VARIANT_METAFIELD_OWNER_TYPE,
+    label: f.key,
+    key: f.key,
+    name: f.name,
+    storefrontAccess: f.storefrontAccess,
+  })),
+  ...PRODUCT_METAFIELD_FIELDS.map((f) => ({
+    ownerType: PRODUCT_METAFIELD_OWNER_TYPE,
+    label: `product.${f.key}`,
+    key: f.key,
+    name: f.name,
+    storefrontAccess: f.storefrontAccess,
+  })),
+];
 
 /**
  * `devjewels` is a plain namespace, not an app-reserved `$app:` one, so the
@@ -105,13 +138,13 @@ function describe(errors: DefinitionUserError[]): string {
 }
 
 /**
- * Create (or re-assert) the variant metafield definitions for one shop.
+ * Create (or re-assert) the variant and product metafield definitions for one shop.
  *
  * Best effort by design: a shop whose token lacks write_metafield_definitions
  * still connects and still syncs stock — the details just stay invisible until
  * the scope is granted, and the returned `failed` map says so.
  */
-export async function ensureShopifyVariantMetafieldDefinitions(
+export async function ensureShopifyMetafieldDefinitions(
   client: ShopifyAdminClient,
 ): Promise<EnsureMetafieldDefinitionsResult> {
   const result: EnsureMetafieldDefinitionsResult = {
@@ -120,7 +153,7 @@ export async function ensureShopifyVariantMetafieldDefinitions(
     failed: {},
   };
 
-  for (const field of VARIANT_METAFIELD_FIELDS) {
+  for (const field of DEFINITIONS) {
     const access = definitionAccess(field.storefrontAccess);
     try {
       const created = await client.graphql<CreateData>(METAFIELD_DEFINITION_CREATE, {
@@ -129,13 +162,13 @@ export async function ensureShopifyVariantMetafieldDefinitions(
           namespace: DEVJEWELS_METAFIELD_NAMESPACE,
           key: field.key,
           type: VARIANT_METAFIELD_TYPE,
-          ownerType: VARIANT_METAFIELD_OWNER_TYPE,
+          ownerType: field.ownerType,
           description: `DevJewels live stock — ${field.name}.`,
           access,
         },
       });
       if (created.errors?.length) {
-        result.failed[field.key] = created.errors
+        result.failed[field.label] = created.errors
           .map((e) => e.message)
           .join("; ")
           .slice(0, 300);
@@ -143,11 +176,11 @@ export async function ensureShopifyVariantMetafieldDefinitions(
       }
       const errors = created.data?.metafieldDefinitionCreate?.userErrors ?? [];
       if (!errors.length) {
-        result.created.push(field.key);
+        result.created.push(field.label);
         continue;
       }
       if (!isTaken(errors)) {
-        result.failed[field.key] = describe(errors);
+        result.failed[field.label] = describe(errors);
         continue;
       }
 
@@ -156,21 +189,21 @@ export async function ensureShopifyVariantMetafieldDefinitions(
         definition: {
           namespace: DEVJEWELS_METAFIELD_NAMESPACE,
           key: field.key,
-          ownerType: VARIANT_METAFIELD_OWNER_TYPE,
+          ownerType: field.ownerType,
           access,
         },
       });
       const updateErrors =
         updated.data?.metafieldDefinitionUpdate?.userErrors ?? [];
       if (updated.errors?.length || updateErrors.length) {
-        result.failed[field.key] = updated.errors?.length
+        result.failed[field.label] = updated.errors?.length
           ? updated.errors.map((e) => e.message).join("; ").slice(0, 300)
           : describe(updateErrors);
         continue;
       }
-      result.existing.push(field.key);
+      result.existing.push(field.label);
     } catch (err) {
-      result.failed[field.key] =
+      result.failed[field.label] =
         err instanceof Error ? err.message.slice(0, 300) : "unknown_error";
     }
   }

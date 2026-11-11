@@ -19,7 +19,7 @@ import { writeVaultSecret } from "@/security/vault";
 import { optionalProcessEnv } from "@/config/serverEnv";
 import { resolveShopifyCredentials } from "@/security/secrets";
 import {
-  ensureShopifyVariantMetafieldDefinitions,
+  ensureShopifyMetafieldDefinitions,
   fetchShopifyLocations,
   shopifyClientFromCreds,
   getShopifyMetaStore,
@@ -282,7 +282,7 @@ export async function connectShopifyStore(
   // Best effort: a shop that connects without write_metafield_definitions still
   // syncs stock, the details just stay hidden until the scope is granted.
   try {
-    await ensureShopifyVariantMetafieldDefinitions(
+    await ensureShopifyMetafieldDefinitions(
       shopifyClientFromCreds({ shopDomain, accessToken }),
     );
   } catch (err) {

@@ -309,6 +309,34 @@ async function main(): Promise<void> {
     !refreshedKeys.includes("price") && offUpdates.every((v) => !("price" in v)),
     refreshedKeys.join(", "),
   );
+  // The design's details table goes on the product through metafieldsSet,
+  // which names its devjewels keys and nothing else.
+  const productDetails = off.calls
+    .filter((c) => c.op === "metafieldsSet")
+    .flatMap(
+      (c) =>
+        (c.variables.metafields ?? []) as Array<{
+          ownerId: string;
+          namespace: string;
+          key: string;
+          value: string;
+        }>,
+    );
+  check(
+    "the product carries the design's details for a theme that hides job numbers",
+    productDetails.length > 0 &&
+      productDetails.every(
+        (m) => m.ownerId === "gid://shopify/Product/1" && m.namespace === "devjewels",
+      ) &&
+      productDetails.find((m) => m.key === "metal")?.value === "Gold" &&
+      productDetails.find((m) => m.key === "design_no")?.value === "DE-093",
+    JSON.stringify(productDetails),
+  );
+  check(
+    "the product details never carry a job number or a price",
+    !productDetails.some((m) => ["job_no", "price"].includes(m.key)),
+    productDetails.map((m) => m.key).join(", "),
+  );
   check(
     "content sync off never sends a title rewrite (merchant name stays theirs)",
     !off.calls.some(
