@@ -79,8 +79,14 @@ function isThrottled<T>(body: ShopifyGraphqlResponse<T>): boolean {
   );
 }
 
-/** Time for the bucket to hold this query's cost again, from Shopify's own numbers. */
-export function throttleWaitMs<T>(body: ShopifyGraphqlResponse<T>): number {
+/**
+ * Time for the bucket to hold this query's cost again, from Shopify's own
+ * numbers — and never less than an exponential floor per attempt (1s, 2s, 4s,
+ * …). The bucket is shared by every worker on the shop, so "just enough for
+ * me" loses to whoever drains it first; a catalog import running beside its
+ * own inventory fan-out exhausted six short retries on 2026-11-11.
+ */
+export function throttleWaitMs<T>(body: ShopifyGraphqlResponse<T>, attempt = 0): number {
   const cost = body.extensions?.cost;
   const requested = Number(cost?.requestedQueryCost ?? 0);
   const available = Number(cost?.throttleStatus?.currentlyAvailable ?? 0);
@@ -89,9 +95,12 @@ export function throttleWaitMs<T>(body: ShopifyGraphqlResponse<T>): number {
     restoreRate > 0 && requested > available
       ? Math.ceil(((requested - available) / restoreRate) * 1000)
       : 1000;
+  const floor = 1000 * 2 ** Math.max(0, attempt);
   // Jitter so workers that ran dry together do not all come back on one tick.
   const jitter = Math.floor(Math.random() * 250);
-  return Math.min(THROTTLE_MAX_WAIT_MS, Math.max(THROTTLE_MIN_WAIT_MS, needed)) + jitter;
+  return (
+    Math.min(THROTTLE_MAX_WAIT_MS, Math.max(THROTTLE_MIN_WAIT_MS, needed, floor)) + jitter
+  );
 }
 
 function parseRetryAfterMs(header: string | null): number | undefined {
@@ -181,7 +190,7 @@ export function createShopifyClient(config: ShopifyClientConfig): ShopifyAdminCl
       for (let attempt = 0; ; attempt += 1) {
         const body = await send<T>(query, variables);
         if (!isThrottled(body) || attempt >= THROTTLE_MAX_RETRIES) return body;
-        const waitMs = throttleWaitMs(body);
+        const waitMs = throttleWaitMs(body, attempt);
         console.info("shopify_throttled_retry", { shopDomain, attempt: attempt + 1, waitMs });
         await sleep(waitMs);
       }

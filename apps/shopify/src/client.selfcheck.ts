@@ -72,6 +72,31 @@ async function main(): Promise<void> {
     }) <= 10_250,
   );
 
+  const backoff = [0, 1, 2, 3, 4, 5].map((a) =>
+    throttleWaitMs(
+      {
+        ...THROTTLED,
+        extensions: {
+          cost: {
+            requestedQueryCost: 10,
+            throttleStatus: { currentlyAvailable: 5, restoreRate: 100 },
+          },
+        },
+      },
+      a,
+    ),
+  );
+  check(
+    "each retry waits longer, so a bucket shared with other workers can refill",
+    backoff[0] >= 1000 && backoff[3] >= 8000 && backoff.every((w, i) => i === 0 || w >= backoff[i - 1] - 250),
+    backoff.join(", "),
+  );
+  check(
+    "six retries give the bucket at least half a minute",
+    backoff.reduce((a, b) => a + b, 0) >= 30_000,
+    String(backoff.reduce((a, b) => a + b, 0)),
+  );
+
   console.log("throttled for good: give up, bounded");
 
   let stuckCalls = 0;
