@@ -146,7 +146,7 @@ variant's own page.
 A merchant may rebuild the picker themselves. New pieces fill these option
 names from job data: `Metal` (`14K White Gold`), `Metal Type` / `Metal Color`
 (`White Gold`, `Platinum`), `Karat` / `Purity` / `Quality` (`14K`), `Color`,
-`Size`. Any other option blocks the add and is logged as
+`Size` / `Ring Size` / `Length`. Any other option blocks the add and is logged as
 `shopify_live_stock_variant_options_unfillable`.
 
 Definitions are created at connect and re-asserted at catalog import, so a shop

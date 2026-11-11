@@ -864,6 +864,20 @@ async function main(): Promise<void> {
     JSON.stringify(fillable),
   );
 
+  const ringSize = newVariantOptionValues(
+    {
+      options: [{ name: "Ring Size", values: [] }],
+      optionNames: ["Ring Size"],
+      variants: [],
+    } as never,
+    { jobNo: "8735", details: { size: "7" } },
+  );
+  check(
+    "a Ring Size option is filled from the job size",
+    JSON.stringify(ringSize) === JSON.stringify([{ optionName: "Ring Size", name: "7" }]),
+    JSON.stringify(ringSize),
+  );
+
   // Buffed & Bubbly's picker: Metal Type (Rose / White / Yellow Gold, Platinum) + Karat.
   const split = (details: Record<string, string>) =>
     newVariantOptionValues(

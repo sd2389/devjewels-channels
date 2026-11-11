@@ -1180,7 +1180,10 @@ const OPTION_VALUE_SOURCES: Array<{
     pick: (d) => displayToken(d?.purity || ""),
   },
   { match: /^colou?r$/i, pick: (d) => displayToken(d?.color || "") },
-  { match: /^(size|length)$/i, pick: (d) => displayToken(d?.size || "") },
+  {
+    match: /^((ring|bracelet|chain)[\s_-]*)?(size|length)$/i,
+    pick: (d) => displayToken(d?.size || ""),
+  },
 ];
 
 /**
