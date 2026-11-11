@@ -139,7 +139,15 @@ which touches only those keys, so this runs on every sync even when
 a sold-out design (only the design_no placeholder) keeps its last details,
 since the merchant still sells it made to order. Because these have
 `PRODUCT`-owner definitions, they show in Shopify admin's **Product metafields**
-card; the variant fields only show on each variant's own page.
+card (labelled `DevJewels Metal`, `DevJewels Size`, … so they never sit next to a
+merchant field with the same name); the variant fields only show on each
+variant's own page.
+
+A merchant may rebuild the picker themselves. New pieces fill these option
+names from job data: `Metal` (`14K White Gold`), `Metal Type` / `Metal Color`
+(`White Gold`, `Platinum`), `Karat` / `Purity` / `Quality` (`14K`), `Color`,
+`Size`. Any other option blocks the add and is logged as
+`shopify_live_stock_variant_options_unfillable`.
 
 Definitions are created at connect and re-asserted at catalog import, so a shop
 connected earlier heals on its next import. Creating one that already exists is

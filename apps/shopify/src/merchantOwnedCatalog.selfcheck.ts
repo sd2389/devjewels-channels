@@ -864,6 +864,36 @@ async function main(): Promise<void> {
     JSON.stringify(fillable),
   );
 
+  // Buffed & Bubbly's picker: Metal Type (Rose / White / Yellow Gold, Platinum) + Karat.
+  const split = (details: Record<string, string>) =>
+    newVariantOptionValues(
+      {
+        options: [
+          { name: "Metal Type", values: [] },
+          { name: "Karat", values: [] },
+        ],
+        optionNames: ["Metal Type", "Karat"],
+        variants: [],
+      } as never,
+      { jobNo: "J1", details },
+    );
+  const roseGold = split({ metal: "GOLD", purity: "18K", color: "R" });
+  check(
+    "a Metal Type + Karat picker is filled, karat kept out of the metal",
+    JSON.stringify(roseGold) ===
+      JSON.stringify([
+        { optionName: "Metal Type", name: "Rose Gold" },
+        { optionName: "Karat", name: "18K" },
+      ]),
+    JSON.stringify(roseGold),
+  );
+  const platinum = split({ metal: "PLATINUM", purity: "950", color: "W" });
+  check(
+    "platinum reads as Platinum, not White Platinum",
+    platinum?.[0]?.name === "Platinum",
+    JSON.stringify(platinum),
+  );
+
   if (failures > 0) {
     console.error(`\n${failures} check(s) failed`);
     process.exit(1);

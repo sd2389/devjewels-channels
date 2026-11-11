@@ -98,11 +98,23 @@ export function storefrontMetalLabel(details?: {
 }): string {
   const metal = displayToken(details?.metal || "");
   const purity = displayToken(details?.purity || "");
-  const color = displayToken(details?.color || "");
+  // Platinum has no colour: a "W" on a platinum job is not "White Platinum".
+  const color = /platinum/i.test(metal) ? "" : displayToken(details?.color || "");
   if (!metal && !purity && !color) return "";
   const colorInMetal =
     color.length > 0 && metal.toLowerCase().includes(color.toLowerCase());
   return [purity, colorInMetal ? "" : color, metal].filter(Boolean).join(" ");
+}
+
+/**
+ * The metal without its karat, for a merchant who splits the picker into
+ * "Metal Type" and "Karat": "White Gold", "Rose Gold", "Platinum".
+ */
+export function storefrontMetalTypeLabel(details?: {
+  metal?: string;
+  color?: string;
+}): string {
+  return storefrontMetalLabel({ metal: details?.metal, color: details?.color });
 }
 
 /**
@@ -1159,6 +1171,10 @@ const OPTION_VALUE_SOURCES: Array<{
   pick: (details?: ChannelJobVariantDetails) => string;
 }> = [
   { match: /^(metal|material)$/i, pick: (d) => storefrontMetalLabel(d) },
+  {
+    match: /^(metal|material)[\s_-]*(type|colou?r)$/i,
+    pick: (d) => storefrontMetalTypeLabel(d),
+  },
   {
     match: /^(karat|carat|kt|purity|quality)$/i,
     pick: (d) => displayToken(d?.purity || ""),

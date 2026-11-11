@@ -216,6 +216,11 @@ async function main(): Promise<void> {
     productDefs.map((d) => d.key).join(", "),
   );
   check(
+    "product labels cannot be confused with the merchant's own fields",
+    productDefs.every((d) => String(d.name).startsWith("DevJewels ")),
+    productDefs.map((d) => d.name).join(", "),
+  );
+  check(
     "variant and product keys are reported apart",
     freshResult.created.includes("metal") && freshResult.created.includes("product.metal"),
     freshResult.created.join(", "),

@@ -47,11 +47,13 @@ const DEFINITIONS: DefinitionSpec[] = [
     name: f.name,
     storefrontAccess: f.storefrontAccess,
   })),
+  // Prefixed: merchants keep their own product fields ("Size", "Shape", …) in
+  // the same card, and two rows both called "Size" cannot be told apart.
   ...PRODUCT_METAFIELD_FIELDS.map((f) => ({
     ownerType: PRODUCT_METAFIELD_OWNER_TYPE,
     label: `product.${f.key}`,
     key: f.key,
-    name: f.name,
+    name: `DevJewels ${f.name}`,
     storefrontAccess: f.storefrontAccess,
   })),
 ];
