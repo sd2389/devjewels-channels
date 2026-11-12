@@ -13,6 +13,12 @@
  * Run at connect and again at catalog import: creating a definition that is
  * already there is a no-op, so an already-connected shop heals on its next
  * import without anyone touching it.
+ *
+ * Product definitions are pinned. An unpinned definition sits at the bottom of
+ * the product's metafields card, or behind "Show all", under every field the
+ * merchant pinned — Buffed & Bubbly saw a card of their own empty fields and
+ * concluded the DevJewels details were missing. Shopify caps pins per owner
+ * type; at the cap the definition is kept unpinned rather than lost.
  */
 import type { ShopifyAdminClient } from "./client";
 import {
@@ -32,6 +38,8 @@ type DefinitionSpec = {
   key: string;
   name: string;
   storefrontAccess: VariantMetafieldStorefrontAccess;
+  /** Pin into the admin card. Product only: variant pages are short already. */
+  pin: boolean;
 };
 
 /**
@@ -46,6 +54,7 @@ const DEFINITIONS: DefinitionSpec[] = [
     key: f.key,
     name: f.name,
     storefrontAccess: f.storefrontAccess,
+    pin: false,
   })),
   // Prefixed: merchants keep their own product fields ("Size", "Shape", …) in
   // the same card, and two rows both called "Size" cannot be told apart.
@@ -55,6 +64,7 @@ const DEFINITIONS: DefinitionSpec[] = [
     key: f.key,
     name: `DevJewels ${f.name}`,
     storefrontAccess: f.storefrontAccess,
+    pin: true,
   })),
 ];
 
@@ -125,6 +135,8 @@ export type EnsureMetafieldDefinitionsResult = {
   existing: string[];
   /** Key → reason. Never throws: a definition is not worth failing a connect. */
   failed: Record<string, string>;
+  /** Meant to be pinned, but the shop is at Shopify's pin limit (or the type cannot pin). */
+  unpinned: string[];
 };
 
 function isTaken(errors: DefinitionUserError[]): boolean {
@@ -132,6 +144,15 @@ function isTaken(errors: DefinitionUserError[]): boolean {
     (e) =>
       String(e.code || "").toUpperCase() === "TAKEN" ||
       /already (exists|in use)|taken/i.test(e.message),
+  );
+}
+
+/** The pin was refused, not the definition: retry it unpinned. */
+function isPinRefused(errors: DefinitionUserError[]): boolean {
+  return errors.some((e) =>
+    ["PINNED_LIMIT_REACHED", "UNSUPPORTED_PINNING"].includes(
+      String(e.code || "").toUpperCase(),
+    ),
   );
 }
 
@@ -153,22 +174,34 @@ export async function ensureShopifyMetafieldDefinitions(
     created: [],
     existing: [],
     failed: {},
+    unpinned: [],
   };
 
   for (const field of DEFINITIONS) {
     const access = definitionAccess(field.storefrontAccess);
+    let pin = field.pin;
     try {
-      const created = await client.graphql<CreateData>(METAFIELD_DEFINITION_CREATE, {
-        definition: {
-          name: field.name,
-          namespace: DEVJEWELS_METAFIELD_NAMESPACE,
-          key: field.key,
-          type: VARIANT_METAFIELD_TYPE,
-          ownerType: field.ownerType,
-          description: `DevJewels live stock — ${field.name}.`,
-          access,
-        },
-      });
+      const create = (withPin: boolean) =>
+        client.graphql<CreateData>(METAFIELD_DEFINITION_CREATE, {
+          definition: {
+            name: field.name,
+            namespace: DEVJEWELS_METAFIELD_NAMESPACE,
+            key: field.key,
+            type: VARIANT_METAFIELD_TYPE,
+            ownerType: field.ownerType,
+            description: `DevJewels live stock — ${field.name}.`,
+            access,
+            ...(withPin ? { pin: true } : {}),
+          },
+        });
+      let created = await create(pin);
+      if (
+        pin &&
+        isPinRefused(created.data?.metafieldDefinitionCreate?.userErrors ?? [])
+      ) {
+        pin = false;
+        created = await create(false);
+      }
       if (created.errors?.length) {
         result.failed[field.label] = created.errors
           .map((e) => e.message)
@@ -179,6 +212,7 @@ export async function ensureShopifyMetafieldDefinitions(
       const errors = created.data?.metafieldDefinitionCreate?.userErrors ?? [];
       if (!errors.length) {
         result.created.push(field.label);
+        if (field.pin && !pin) result.unpinned.push(field.label);
         continue;
       }
       if (!isTaken(errors)) {
@@ -186,15 +220,27 @@ export async function ensureShopifyMetafieldDefinitions(
         continue;
       }
 
-      // Already defined — re-assert storefront access.
-      const updated = await client.graphql<UpdateData>(METAFIELD_DEFINITION_UPDATE, {
-        definition: {
-          namespace: DEVJEWELS_METAFIELD_NAMESPACE,
-          key: field.key,
-          ownerType: field.ownerType,
-          access,
-        },
-      });
+      // Already defined — re-assert storefront access, and the pin for a
+      // product field so shops connected before pinning heal on next import.
+      pin = field.pin;
+      const update = (withPin: boolean) =>
+        client.graphql<UpdateData>(METAFIELD_DEFINITION_UPDATE, {
+          definition: {
+            namespace: DEVJEWELS_METAFIELD_NAMESPACE,
+            key: field.key,
+            ownerType: field.ownerType,
+            access,
+            ...(withPin ? { pin: true } : {}),
+          },
+        });
+      let updated = await update(pin);
+      if (
+        pin &&
+        isPinRefused(updated.data?.metafieldDefinitionUpdate?.userErrors ?? [])
+      ) {
+        pin = false;
+        updated = await update(false);
+      }
       const updateErrors =
         updated.data?.metafieldDefinitionUpdate?.userErrors ?? [];
       if (updated.errors?.length || updateErrors.length) {
@@ -204,6 +250,7 @@ export async function ensureShopifyMetafieldDefinitions(
         continue;
       }
       result.existing.push(field.label);
+      if (field.pin && !pin) result.unpinned.push(field.label);
     } catch (err) {
       result.failed[field.label] =
         err instanceof Error ? err.message.slice(0, 300) : "unknown_error";
@@ -215,6 +262,7 @@ export async function ensureShopifyMetafieldDefinitions(
     created: result.created.length,
     existing: result.existing.length,
     failed: Object.keys(result.failed).length,
+    unpinned: result.unpinned.length,
   });
   return result;
 }

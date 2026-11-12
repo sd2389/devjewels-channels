@@ -225,6 +225,19 @@ async function main(): Promise<void> {
     freshResult.created.includes("metal") && freshResult.created.includes("product.metal"),
     freshResult.created.join(", "),
   );
+  check(
+    "product fields are pinned, so they sit in the card instead of behind Show all",
+    productDefs.every((d) => d.pin === true),
+    productDefs.map((d) => `${d.key}:${String(d.pin)}`).join(", "),
+  );
+  check(
+    "variant fields are left unpinned",
+    fresh.calls
+      .map((c) => c.variables.definition as Record<string, unknown>)
+      .filter((d) => d?.ownerType === "PRODUCTVARIANT")
+      .every((d) => !("pin" in d)),
+  );
+  check("a fresh shop reports nothing unpinned", freshResult.unpinned.length === 0);
   const firstDef = fresh.calls[0]?.variables.definition as Record<string, unknown>;
   check(
     "scoped to the variant, not the product",
@@ -293,6 +306,78 @@ async function main(): Promise<void> {
         ) === JSON.stringify({ storefront: "PUBLIC_READ" }),
     ),
   );
+  check(
+    "an existing product field is pinned on the next import",
+    again.calls.some(
+      (c) =>
+        c.op === "metafieldDefinitionUpdate" &&
+        (c.variables.definition as Record<string, unknown>)?.ownerType === "PRODUCT" &&
+        (c.variables.definition as Record<string, unknown>)?.pin === true,
+    ) &&
+      !again.calls.some(
+        (c) =>
+          c.op === "metafieldDefinitionUpdate" &&
+          (c.variables.definition as Record<string, unknown>)?.ownerType ===
+            "PRODUCTVARIANT" &&
+          "pin" in ((c.variables.definition as Record<string, unknown>) ?? {}),
+      ),
+  );
+
+  console.log("pin limit: the field is kept, just unpinned");
+
+  const pinRefused = { code: "PINNED_LIMIT_REACHED", message: "The pinned limit has been reached" };
+  const full = fakeClient((_op, vars) => {
+    const pinned = (vars.definition as Record<string, unknown>)?.pin === true;
+    return {
+      data: {
+        metafieldDefinitionCreate: pinned
+          ? { userErrors: [pinRefused] }
+          : { createdDefinition: { id: "gid://shopify/MetafieldDefinition/1" }, userErrors: [] },
+      },
+    };
+  });
+  const fullResult = await ensureShopifyMetafieldDefinitions(full.client);
+  check(
+    "every definition is still created",
+    fullResult.created.length === ALL_DEFINITIONS &&
+      Object.keys(fullResult.failed).length === 0,
+    JSON.stringify(fullResult.failed),
+  );
+  check(
+    "the product fields that could not pin are reported",
+    fullResult.unpinned.length === PRODUCT_METAFIELD_FIELDS.length &&
+      fullResult.unpinned.every((l) => l.startsWith("product.")),
+    fullResult.unpinned.join(", "),
+  );
+
+  const fullExisting = fakeClient((op, vars) => {
+    if (op === "metafieldDefinitionCreate") {
+      return {
+        data: {
+          metafieldDefinitionCreate: {
+            userErrors: [{ code: "TAKEN", message: "Key is in use" }],
+          },
+        },
+      };
+    }
+    const pinned = (vars.definition as Record<string, unknown>)?.pin === true;
+    return {
+      data: {
+        metafieldDefinitionUpdate: pinned
+          ? { userErrors: [pinRefused] }
+          : { updatedDefinition: { id: "gid://shopify/MetafieldDefinition/1" }, userErrors: [] },
+      },
+    };
+  });
+  const fullExistingResult = await ensureShopifyMetafieldDefinitions(fullExisting.client);
+  check(
+    "an existing shop at the limit still gets its storefront access re-asserted",
+    fullExistingResult.existing.length === ALL_DEFINITIONS &&
+      Object.keys(fullExistingResult.failed).length === 0 &&
+      fullExistingResult.unpinned.length === PRODUCT_METAFIELD_FIELDS.length,
+    JSON.stringify(fullExistingResult),
+  );
+
   console.log("failure: must never break a connect");
 
   const denied = fakeClient(() => ({
