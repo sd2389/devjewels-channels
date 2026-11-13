@@ -59,6 +59,7 @@ SQL stubs:
 - `apps/core/src/db/shared/001_channels_schema.sql` — `CREATE SCHEMA` + shared tables
 - `apps/core/src/db/shared/002_connection_entitlements.sql` — customer_id + markup columns
 - `apps/core/src/db/shared/003_connection_design_markup.sql` — per-design markup overrides
+- `apps/core/src/db/shared/005_metal_size_variants.sql` — per-store variant layout (`piece` / `metal_size`), description opt-in, `variant_slot` table. Apply before deploying code that reads it.
 - `apps/shopify/src/db/001_shopify_tables.sql`
 - `apps/woocommerce/src/db/001_woocommerce_tables.sql`
 
@@ -293,6 +294,7 @@ psql "$DATABASE_URL" -f apps/core/src/db/shared/001_channels_schema.sql
 psql "$DATABASE_URL" -f apps/core/src/db/shared/002_connection_entitlements.sql
 psql "$DATABASE_URL" -f apps/core/src/db/shared/003_connection_design_markup.sql
 psql "$DATABASE_URL" -f apps/core/src/db/shared/004_vault_secret.sql
+psql "$DATABASE_URL" -f apps/core/src/db/shared/005_metal_size_variants.sql
 psql "$DATABASE_URL" -f apps/shopify/src/db/001_shopify_tables.sql
 psql "$DATABASE_URL" -f apps/shopify/src/db/004_shopify_connect_invite.sql
 psql "$DATABASE_URL" -f apps/shopify/src/db/005_shopify_connect_invite_shop_pending.sql

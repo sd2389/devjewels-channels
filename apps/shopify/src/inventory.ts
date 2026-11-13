@@ -125,3 +125,43 @@ export async function setShopifyInventoryLevel(
     "inventorySetQuantities",
   );
 }
+
+/** Shopify caps one inventorySetQuantities call at 250 quantities. */
+const SET_QUANTITIES_BATCH = 250;
+
+/** Set `available` for many items at one location, 250 per call. */
+export async function setShopifyInventoryLevels(
+  client: ShopifyAdminClient,
+  input: {
+    locationId: string;
+    items: Array<{ inventoryItemId: string; available: number }>;
+  },
+): Promise<void> {
+  const locationId = toGid("Location", input.locationId);
+  const quantities = input.items.map((item) => {
+    const quantity = Math.trunc(item.available);
+    if (!Number.isFinite(quantity) || quantity < 0) {
+      throw new ShopifyHttpError(400, `Invalid inventory quantity: ${item.available}`);
+    }
+    return { inventoryItemId: toGid("InventoryItem", item.inventoryItemId), locationId, quantity };
+  });
+  for (let i = 0; i < quantities.length; i += SET_QUANTITIES_BATCH) {
+    const result = await client.graphql<{
+      inventorySetQuantities?: {
+        userErrors?: Array<{ field?: string[]; message: string; code?: string }>;
+      };
+    }>(SET_QUANTITIES, {
+      input: {
+        name: "available",
+        reason: "correction",
+        ignoreCompareQuantity: true,
+        quantities: quantities.slice(i, i + SET_QUANTITIES_BATCH),
+      },
+    });
+    throwGraphqlOrUserErrors(
+      result.errors,
+      result.data?.inventorySetQuantities?.userErrors,
+      "inventorySetQuantities",
+    );
+  }
+}

@@ -6,6 +6,8 @@ import type {
   InventoryUpdateInput,
   NormalizedChannelOrder,
   PriceUpdateInput,
+  SyncMetalSizeVariantsInput,
+  SyncMetalSizeVariantsResult,
   UpdateProductInput,
   UpdateProductResult,
   WebhookVerificationInput,
@@ -22,6 +24,7 @@ import {
   setShopifyInventoryLevel,
 } from "./inventory";
 import { ensureShopifyMetafieldDefinitions } from "./metafieldDefinitions";
+import { syncShopifyMetalSizeVariants } from "./metalSizeVariants";
 import { getShopifyMetaStore } from "./meta";
 import {
   createShopifyProduct,
@@ -268,6 +271,33 @@ export const shopifyAdapter: CommerceChannel = {
       jobNo: input.jobNo,
       quantity: input.quantity,
     });
+  },
+
+  async syncMetalSizeVariants(
+    input: SyncMetalSizeVariantsInput,
+  ): Promise<SyncMetalSizeVariantsResult> {
+    const secretRef = input.credentialsSecretRef?.trim();
+    if (!secretRef) {
+      throw new InventorySkipError(
+        "missing_credentials_ref",
+        "credentialsSecretRef required for syncMetalSizeVariants",
+      );
+    }
+    const meta = getShopifyMetaStore();
+    const shop = await meta.getShop(input.connectionId);
+    const locationId = (await meta.getPrimaryLocation(input.connectionId))?.external_location_id;
+    if (!locationId) {
+      throw new InventorySkipError(
+        "missing_location",
+        "shopify_location row required for the Metal × Size layout",
+      );
+    }
+    const credentials = await resolveShopifyCredentials(secretRef, shop?.shop_domain);
+    const client = createShopifyClient({
+      shopDomain: credentials.shopDomain,
+      accessToken: credentials.accessToken,
+    });
+    return syncShopifyMetalSizeVariants(client, { ...input, locationId });
   },
 
   async updatePrice(input: PriceUpdateInput): Promise<void> {

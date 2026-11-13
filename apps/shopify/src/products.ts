@@ -18,6 +18,11 @@ import {
   type ShopifyMetafieldInput,
 } from "./variantMetafieldSchema";
 import { ShopifyHttpError } from "./client";
+import {
+  cheapestFirst,
+  stockTableDescriptionHtml,
+  writeShopifyStockDescription,
+} from "./stockDescription";
 
 /** Shown on Shopify product Vendor — marks DevJewels catalog lines. */
 export const DEVJEWELS_SHOPIFY_VENDOR = "Dev Jewels Inc.";
@@ -26,7 +31,7 @@ export const DEVJEWELS_SHOPIFY_VENDOR = "Dev Jewels Inc.";
  * First push is unpublished. Updates must not send status: once a merchant
  * sets the product Active, later syncs have to leave that choice in place.
  */
-const NEW_SHOPIFY_PRODUCT_STATUS = "DRAFT";
+export const NEW_SHOPIFY_PRODUCT_STATUS = "DRAFT";
 
 /**
  * The design's product-level details — see variantMetafieldSchema for the list.
@@ -65,7 +70,8 @@ const LEGACY_JOB_OPTION = "Job";
 const DEFAULT_OPTION = "Title";
 const OPTION_VALUE_MAX = 255;
 
-function displayToken(raw: string): string {
+/** "14k" → "14K", "W" → "White", "gold" → "Gold". */
+export function displayToken(raw: string): string {
   return raw
     .trim()
     .split(/\s+/)
@@ -179,7 +185,7 @@ export function normalizeDesignNoKey(designNo: string): string {
 }
 
 /** productType + tags for ProductCreateInput / ProductUpdateInput (skip empties). */
-function shopifyTaxonomyFields(input: {
+export function shopifyTaxonomyFields(input: {
   designNo?: string;
   productType?: string;
   tags?: string[];
@@ -374,7 +380,7 @@ type BulkVariantData = {
   };
 };
 
-function throwUserErrors(
+export function throwUserErrors(
   userErrors: Array<{ field?: string[]; message: string }> | undefined,
   label: string,
 ): void {
@@ -385,7 +391,7 @@ function throwUserErrors(
   );
 }
 
-function throwGraphqlErrors(
+export function throwGraphqlErrors(
   errors: Array<{ message: string }> | undefined,
 ): void {
   if (!errors?.length) return;
@@ -410,7 +416,7 @@ type MetafieldsWriteData = {
  * is safe on a product the merchant owns. Keys no live piece carries any more
  * are deleted so the product cannot keep advertising a sold piece's metal.
  */
-async function writeShopifyProductDetails(
+export async function writeShopifyProductDetails(
   client: ShopifyAdminClient,
   productId: string,
   input: {
@@ -973,12 +979,16 @@ export async function createShopifyProduct(
   // One piece keeps Shopify's default Title variant so the theme hides the picker.
   // Two or more pieces get one Metal option (14K White Gold, …). Job number stays on SKU.
   const plan = storefrontOptionPlan(input.variants);
-  // Piece attributes are metafields only — never description HTML.
+  // Piece attributes are metafields; the description gets the stock table only
+  // for a connection that opted in (sync_product_description).
   const result = await client.graphql<ProductCreateData>(PRODUCT_CREATE, {
     product: {
       title: input.title || input.designNo,
       vendor: DEVJEWELS_SHOPIFY_VENDOR,
       status: NEW_SHOPIFY_PRODUCT_STATUS,
+      ...(input.syncProductDescription
+        ? { descriptionHtml: stockTableDescriptionHtml(input.designNo, livePieces(input.variants)) }
+        : {}),
       metafields: designMetafields(input.designNo, input.variants).set,
       ...shopifyTaxonomyFields(input),
       ...(plan
@@ -1072,6 +1082,18 @@ export async function createShopifyProduct(
 /* ------------------------------------------------------------------ *
  * Live-stock variant sync (merchant-owned catalog, the default path)
  * ------------------------------------------------------------------ */
+
+/**
+ * Pieces for the description table: real stock only (never the design_no
+ * placeholder an out-of-stock design sits on, which has quantity 0).
+ */
+function livePieces(variants: CreateProductInput["variants"]) {
+  return cheapestFirst(
+    variants
+      .filter((v) => v.quantity > 0)
+      .map((v) => ({ jobNo: v.jobNo, price: v.price, details: v.details })),
+  );
+}
 
 function jobKey(raw: string): string {
   return String(raw || "").trim().toUpperCase();
@@ -1536,6 +1558,9 @@ export async function syncShopifyLiveStockVariants(
   // Last, so live stock lands first: the design's details table is DevJewels
   // data in the devjewels namespace, and it follows the pieces as they sell.
   await writeShopifyProductDetails(client, productId, input);
+  if (input.syncProductDescription) {
+    await writeShopifyStockDescription(client, productId, input.designNo, livePieces(input.variants));
+  }
 
   return { externalProductId: productId, variants: resultVariants };
 }
@@ -1580,7 +1605,9 @@ export async function updateShopifyProduct(
       id: productId,
       title: input.title || input.designNo,
       vendor: DEVJEWELS_SHOPIFY_VENDOR,
-      descriptionHtml: "",
+      descriptionHtml: input.syncProductDescription
+        ? stockTableDescriptionHtml(input.designNo, livePieces(input.variants))
+        : "",
       ...shopifyTaxonomyFields(input),
     },
   });

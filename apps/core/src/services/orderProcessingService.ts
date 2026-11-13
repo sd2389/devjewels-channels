@@ -103,6 +103,9 @@ export async function runOrderProcessingJob(
     const resolved = await resolveChannelOrderLines({
       connectionId: job.connectionId,
       payload,
+      // Inlined rather than importing connectionVariantLayout: this module loads
+      // the connections repository lazily.
+      metalSizeLayout: connection.variant_layout === "metal_size",
     });
     if (resolved.lines.length === 0) {
       await writeSyncLog({

@@ -9,7 +9,12 @@
 import { registerDefaultAdapters } from "@/channels/registerAdapters";
 import { AdapterRouter } from "@/channels/router";
 import { NotImplementedError } from "@/channels/types";
-import { getConnectionById } from "@/services/connections";
+import {
+  connectionVariantLayout,
+  getConnectionById,
+  type ConnectionRow,
+} from "@/services/connections";
+import { metalSizeLogMessage, syncDesignMetalSize } from "@/services/metalSizeSync";
 import {
   getCatalogImportStore,
   type CatalogImportRow,
@@ -155,6 +160,7 @@ async function collectEligibleDesigns(
 }
 
 async function importOneDesign(input: {
+  connection: ConnectionRow;
   connectionId: string;
   platform: "SHOPIFY" | "WOOCOMMERCE" | "MAGENTO";
   credentialsSecretRef: string | null;
@@ -239,6 +245,49 @@ async function importOneDesign(input: {
     return "skipped";
   }
 
+  if (connectionVariantLayout(input.connection) === "metal_size") {
+    try {
+      const result = await syncDesignMetalSize({
+        connection: input.connection,
+        adapter,
+        designNo: input.designNo,
+        title: input.title,
+        imageUrls: input.imageUrls,
+        productType: input.productType,
+        tags: input.tags,
+        category: String(input.productType || ""),
+        existingProductId: existing?.external_product_id || undefined,
+        canViewPrices: input.canViewPrices,
+        pieces: input.canViewInventory && !outOfStock ? variants : [],
+        fallbackPrice: variants[0]?.price ?? input.defaultPrice,
+        writeInventory: input.syncInventory || !input.canViewInventory,
+      });
+      await writeSyncLog({
+        connectionId: input.connectionId,
+        platform: input.platform,
+        jobType: "product",
+        status: "SUCCESS",
+        designNo: input.designNo,
+        message: metalSizeLogMessage(result),
+      });
+      return "ok";
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message.replace(/shpat_[a-zA-Z0-9]+/g, "shpat_***").slice(0, 500)
+          : "unknown_error";
+      await writeSyncLog({
+        connectionId: input.connectionId,
+        platform: input.platform,
+        jobType: "product",
+        status: "FAILED",
+        designNo: input.designNo,
+        message,
+      });
+      return "failed";
+    }
+  }
+
   try {
     let result;
     let removeVariants: Array<{
@@ -279,6 +328,7 @@ async function importOneDesign(input: {
         designNo: input.designNo,
         title: input.title,
         syncProductContent: input.syncProductContent,
+        syncProductDescription: input.connection.sync_product_description ?? false,
         credentialsSecretRef: input.credentialsSecretRef ?? undefined,
         externalProductId: existing.external_product_id,
         imageUrls: input.imageUrls,
@@ -294,6 +344,7 @@ async function importOneDesign(input: {
         designNo: input.designNo,
         title: input.title,
         syncProductContent: input.syncProductContent,
+        syncProductDescription: input.connection.sync_product_description ?? false,
         credentialsSecretRef: input.credentialsSecretRef ?? undefined,
         imageUrls: input.imageUrls,
         productType: input.productType,
@@ -485,6 +536,7 @@ export async function runCatalogImport(
     const designOverride =
       designMarkupMap.get(normalizeDesignNoKey(design.designNo)) ?? null;
     const outcome = await importOneDesign({
+      connection,
       connectionId: connection.id,
       platform: connection.platform,
       credentialsSecretRef: connection.credentials_secret_ref,

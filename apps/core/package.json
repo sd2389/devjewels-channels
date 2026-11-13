@@ -32,7 +32,8 @@
     "selfcheck:job-details": "npx --yes tsx src/services/jobVariantDetails.selfcheck.ts",
     "selfcheck:channel-inventory-jobs": "npx --yes tsx src/services/channelInventoryJobs.selfcheck.ts",
     "selfcheck:channel-order-lines": "npx --yes tsx src/services/channelOrderLineResolve.selfcheck.ts",
-    "selfcheck:shopify-live-e2e": "npx --yes tsx src/services/shopifyLivePath.e2e.selfcheck.ts"
+    "selfcheck:shopify-live-e2e": "npx --yes tsx src/services/shopifyLivePath.e2e.selfcheck.ts",
+    "selfcheck:metal-size": "npx --yes tsx src/services/metalSize.selfcheck.ts"
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "^3.787.0",

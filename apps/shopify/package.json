@@ -12,6 +12,7 @@
     "./inviteStore": "./src/inviteStore.ts",
     "./webhooks": "./src/webhooks.ts",
     "./products": "./src/products.ts",
+    "./metalSizeSlots": "./src/metalSizeSlots.ts",
     "./orders": "./src/orders.ts",
     "./auth-route": "./app/api/shopify/auth/route.ts",
     "./webhooks-route": "./app/api/shopify/webhooks/route.ts"
@@ -25,7 +26,9 @@
     "selfcheck:invite": "npx --yes tsx src/shopifyInvite.selfcheck.ts",
     "selfcheck:merchant-catalog": "npx --yes tsx src/merchantOwnedCatalog.selfcheck.ts",
     "selfcheck:metafield-definitions": "npx --yes tsx src/metafieldDefinitions.selfcheck.ts",
-    "selfcheck:client": "npx --yes tsx src/client.selfcheck.ts"
+    "selfcheck:client": "npx --yes tsx src/client.selfcheck.ts",
+    "selfcheck:metal-size-slots": "npx --yes tsx src/metalSizeSlots.selfcheck.ts",
+    "selfcheck:metal-size-variants": "npx --yes tsx src/metalSizeVariants.selfcheck.ts"
   },
   "dependencies": {
     "@devjewels-channels/core": "*"
