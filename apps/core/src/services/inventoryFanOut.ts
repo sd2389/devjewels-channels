@@ -105,11 +105,12 @@ export function buildInventoryJobsForEntitledMappings(
 }
 
 /**
- * Metal × Size stores entitled to the design: a piece selling or arriving
- * changes which piece backs a variant and how many it holds, so the whole
- * design re-syncs. Pure, so the filter is testable without a database.
+ * Entitled stores whose product, not just one variant, changes with a piece's
+ * stock: Metal × Size (which piece backs a variant, how many it holds) and any
+ * store with the stock table in its description (the table lists live pieces).
+ * Their design re-syncs. Pure, so the filter is testable without a database.
  */
-export function metalSizeConnectionsToResync(
+export function designResyncConnections(
   active: ConnectionRow[],
   entitledCustomerIds: ReadonlySet<number>,
 ): ConnectionRow[] {
@@ -119,7 +120,7 @@ export function metalSizeConnectionsToResync(
       c.sync_inventory &&
       c.customer_id != null &&
       entitledCustomerIds.has(c.customer_id) &&
-      connectionVariantLayout(c) === "metal_size",
+      (connectionVariantLayout(c) === "metal_size" || c.sync_product_description === true),
   );
 }
 
@@ -172,9 +173,9 @@ export async function fanOutInventoryUpdated(
   let productSyncEnqueued = 0;
 
   // With no piece mapping anywhere, the catalog fan-out below already queues a
-  // design sync for every entitled store, Metal × Size ones included.
+  // design sync for every entitled store, these included.
   if (jobs.length > 0) {
-    for (const c of metalSizeConnectionsToResync(active, entitledSet)) {
+    for (const c of designResyncConnections(active, entitledSet)) {
       await enqueueProductSync({
         kind: "product.sync",
         connectionId: c.id,

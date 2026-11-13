@@ -107,6 +107,34 @@ export async function runOrderProcessingJob(
       // the connections repository lazily.
       metalSizeLayout: connection.variant_layout === "metal_size",
     });
+    if (resolved.slotShortfalls.length) {
+      // A Metal × Size variant sold more than we hold. Reserving part of the
+      // order would look like success, so fail it for staff and re-sync each
+      // design so Shopify stops offering what is gone.
+      await writeSyncLog({
+        connectionId: job.connectionId,
+        platform: job.platform,
+        jobType: "order",
+        status: "FAILED",
+        message: `slot_out_of_stock ${resolved.slotShortfalls
+          .map((s) => `${s.sku} wanted=${s.wanted} found=${s.found}`)
+          .join("; ")}`.slice(0, 500),
+        payloadRef: event.external_event_id,
+      });
+      const { enqueueProductSync } = await import("@/services/queue");
+      for (const designNo of new Set(resolved.slotShortfalls.map((s) => s.designNo))) {
+        await enqueueProductSync({
+          kind: "product.sync",
+          connectionId: job.connectionId,
+          platform: job.platform,
+          designNo,
+          action: "sync",
+        });
+      }
+      await store.markStatus(event.id, "failed");
+      return "FAILED";
+    }
+
     if (resolved.lines.length === 0) {
       await writeSyncLog({
         connectionId: job.connectionId,

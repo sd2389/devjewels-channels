@@ -66,6 +66,13 @@ export function pickSlotPieces(input: {
   return picked;
 }
 
+export type SlotShortfall = {
+  designNo: string;
+  sku: string;
+  wanted: number;
+  found: number;
+};
+
 export type ResolvedChannelOrderLine = {
   designNo: string;
   jobNo: string;
@@ -85,6 +92,8 @@ export async function resolveChannelOrderLines(input: {
 }): Promise<{
   lines: ResolvedChannelOrderLine[];
   skippedUnmapped: number;
+  /** Metal × Size lines with fewer pieces than were bought. Non-empty → do not reserve. */
+  slotShortfalls: SlotShortfall[];
 }> {
   const order = asRecord(input.payload);
   if (!order) {
@@ -95,6 +104,7 @@ export async function resolveChannelOrderLines(input: {
   const slotStore = input.metalSizeLayout ? getVariantSlotStore() : null;
   const lines: ResolvedChannelOrderLine[] = [];
   let skippedUnmapped = 0;
+  const slotShortfalls: SlotShortfall[] = [];
   const taken = new Set<string>();
   const liveByDesign = new Map<string, Promise<Set<string>>>();
   const liveJobs = (designNo: string) => {
@@ -144,13 +154,15 @@ export async function resolveChannelOrderLines(input: {
           taken,
           quantity,
         });
-        if (!picked.length) {
-          console.warn("channel_order_slot_empty", {
-            connectionId: input.connectionId,
+        // Never reserve part of a line: fewer pieces than were bought fails the
+        // whole order (the caller logs it and re-syncs the design).
+        if (picked.length < quantity) {
+          slotShortfalls.push({
             designNo: slot.design_no,
             sku: slot.sku,
+            wanted: quantity,
+            found: picked.length,
           });
-          skippedUnmapped += 1;
           continue;
         }
         // Django reserves one piece per line, so each piece is its own line.
@@ -202,7 +214,7 @@ export async function resolveChannelOrderLines(input: {
     });
   }
 
-  return { lines, skippedUnmapped };
+  return { lines, skippedUnmapped, slotShortfalls };
 }
 
 /** Apply resolved lines onto a normalized order shell (platform / ids / email). */

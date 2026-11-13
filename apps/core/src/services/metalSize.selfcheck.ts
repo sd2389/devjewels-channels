@@ -14,7 +14,7 @@ import {
   updateConnectionCatalogLayout,
   type ConnectionRow,
 } from "./connections";
-import { metalSizeConnectionsToResync } from "./inventoryFanOut";
+import { designResyncConnections } from "./inventoryFanOut";
 import { syncDesignMetalSize } from "./metalSizeSync";
 import { createMemoryProductMappingStore, setProductMappingStoreForTests } from "./productMappings";
 import {
@@ -140,26 +140,44 @@ async function main(): Promise<void> {
     metalSizeLayout: true,
     payload: { id: 3, line_items: [{ id: 12, variant_id: 56, sku: "DR-1055-14KR-6", quantity: 1 }] },
   });
-  check("an empty slot reserves nothing", empty.lines.length === 0 && empty.skippedUnmapped === 1);
-  const pieceStore = await resolveChannelOrderLines({
+  check(
+    "an empty slot reserves nothing and reports the shortfall",
+    empty.lines.length === 0 && JSON.stringify(empty.slotShortfalls) === '[{"designNo":"DR-1055","sku":"DR-1055-14KR-6","wanted":1,"found":0}]',
+    JSON.stringify(empty),
+  );
+  const tooMany = await resolveChannelOrderLines({
+    connectionId: CONN,
+    metalSizeLayout: true,
+    payload: { id: 5, line_items: [{ id: 14, variant_id: 55, sku: "DR-1055-14KW-7", quantity: 4 }] },
+  });
+  check(
+    "buying more than the slot holds reserves nothing and reports it",
+    tooMany.lines.length === 0 && tooMany.slotShortfalls[0]?.wanted === 4 && tooMany.slotShortfalls[0]?.found === 3,
+    JSON.stringify(tooMany),
+  );
+  const pieceStoreLines = await resolveChannelOrderLines({
     connectionId: CONN,
     payload: { id: 4, line_items: [{ id: 13, variant_id: 55, sku: "DR-1055-14KW-7", quantity: 1 }] },
   });
   check(
     "a piece-layout store never reads slots",
-    pieceStore.lines.length === 0 && pieceStore.skippedUnmapped === 1,
-    JSON.stringify(pieceStore.lines),
+    pieceStoreLines.lines.length === 0 && pieceStoreLines.skippedUnmapped === 1 && pieceStoreLines.slotShortfalls.length === 0,
+    JSON.stringify(pieceStoreLines.lines),
   );
 
   console.log("stock events");
-  const piece = connection({ id: "p1", customer_id: 1, variant_layout: "piece" });
   const slots = connection({ id: "m1", customer_id: 2 });
   const notEntitled = connection({ id: "m2", customer_id: 3 });
   const noInventory = connection({ id: "m3", customer_id: 4, sync_inventory: false });
-  const resync = metalSizeConnectionsToResync([piece, slots, notEntitled, noInventory], new Set([1, 2, 4]));
+  const pieceWithTable = connection({ id: "p2", customer_id: 1, variant_layout: "piece", sync_product_description: true });
+  const pieceNoTable = connection({ id: "p1", customer_id: 1, variant_layout: "piece", sync_product_description: false });
+  const resync = designResyncConnections(
+    [pieceNoTable, pieceWithTable, slots, notEntitled, noInventory],
+    new Set([1, 2, 4]),
+  );
   check(
-    "only entitled Metal × Size stores with inventory sync re-sync the design",
-    JSON.stringify(resync.map((c) => c.id)) === '["m1"]',
+    "entitled Metal × Size stores and stores with the description table re-sync the design",
+    JSON.stringify(resync.map((c) => c.id)) === '["p2","m1"]',
     JSON.stringify(resync.map((c) => c.id)),
   );
   check(
