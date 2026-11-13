@@ -87,6 +87,11 @@ export type CreateProductInput = {
    * and merchant-made options must not be written.
    */
   syncProductContent?: boolean;
+  /**
+   * Write the live stock table into the description and nothing else of the
+   * product's content (title, images, price, status stay the merchant's).
+   */
+  syncProductDescription?: boolean;
   /** Variants keyed by job_no for mapping. */
   variants: Array<{
     jobNo: string;
@@ -130,6 +135,62 @@ export type UpdateProductInput = CreateProductInput & {
 };
 
 export type UpdateProductResult = CreateProductResult;
+
+/** One live piece placed in a Metal × Size slot. */
+export type ChannelSlotPiece = {
+  jobNo: string;
+  /** Customer-facing price after Channels markup. */
+  price: number;
+  /** DevJewels wholesale cost for inventoryItem.cost. Never the selling price. */
+  wholesaleCost?: number;
+  details?: ChannelJobVariantDetails;
+};
+
+/** One Metal × Size variant. Its first piece is the one an order takes. */
+export type ChannelVariantSlot = {
+  /** Stable identity: lower-cased "metal|size". */
+  key: string;
+  metal: string;
+  /** Absent when the design has no Size option. */
+  size?: string;
+  /** Stable SKU — never a job number. */
+  sku: string;
+  /** Live pieces of the combination, cheapest first. */
+  pieces: ChannelSlotPiece[];
+  quantity: number;
+  /** Price for a new variant (an existing one keeps the merchant's price). */
+  price: number;
+};
+
+export type ChannelMetalSizePlan = {
+  metalValues: string[];
+  /** Empty means no Size option. */
+  sizeValues: string[];
+  slots: ChannelVariantSlot[];
+  /** Pieces with no metal data — reported, never guessed into a slot. */
+  unplaced: string[];
+};
+
+export type SyncMetalSizeVariantsInput = Omit<CreateProductInput, "variants"> & {
+  /** Mapped product, if any. Absent → reclaim by design tag, else create. */
+  externalProductId?: string;
+  plan: ChannelMetalSizePlan;
+  /** Write inventoryItem.cost from each slot's backing piece. */
+  includeCost: boolean;
+  /** Write slot quantities (connection.sync_inventory, or zeroing after a revoke). */
+  writeInventory: boolean;
+};
+
+export type SyncMetalSizeVariantsResult = {
+  externalProductId: string;
+  slots: Array<{
+    key: string;
+    sku: string;
+    externalVariantId: string;
+    externalInventoryItemId?: string;
+    jobNos: string[];
+  }>;
+};
 
 export type DeleteProductInput = {
   connectionId: string;
@@ -175,6 +236,13 @@ export interface CommerceChannel {
   deleteProduct(input: DeleteProductInput): Promise<void>;
 
   updateInventory(input: InventoryUpdateInput): Promise<void>;
+
+  /**
+   * Metal × Size layout: make the product's options, variants, quantities and
+   * details match `plan` in one pass. Optional — platforms without it keep the
+   * piece layout.
+   */
+  syncMetalSizeVariants?(input: SyncMetalSizeVariantsInput): Promise<SyncMetalSizeVariantsResult>;
 
   updatePrice(input: PriceUpdateInput): Promise<void>;
 

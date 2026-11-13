@@ -6,9 +6,13 @@ import { CHANNELS_SCHEMA, tryGetChannelsDb } from "@/db/shared/client";
 import { optionalServerEnv } from "@/config/serverEnv";
 import type { InventoryUpdatedEnvelope } from "@/services/events";
 import { fanOutProductSyncForDesign } from "@/services/catalogFanOut";
-import { listActiveConnectionsWithCustomer } from "@/services/connections";
+import {
+  connectionVariantLayout,
+  listActiveConnectionsWithCustomer,
+  type ConnectionRow,
+} from "@/services/connections";
 import { filterEntitledCustomerIds } from "@/services/entitlements";
-import { enqueueInventorySync } from "@/services/queue";
+import { enqueueInventorySync, enqueueProductSync } from "@/services/queue";
 import type { ChannelPlatform } from "@/channels/types";
 import type { InventorySyncJob } from "@/workers/handlers";
 
@@ -47,6 +51,7 @@ async function loadVariantMappings(
      WHERE c.is_active = TRUE
        AND c.sync_inventory = TRUE
        AND c.customer_id IS NOT NULL
+       AND c.variant_layout <> 'metal_size'
        AND upper(replace(vm.design_no, ' ', '')) = upper(replace($1, ' ', ''))
        AND upper(vm.job_no) = upper($2)`,
     [designNo, jobNo],
@@ -99,6 +104,26 @@ export function buildInventoryJobsForEntitledMappings(
     }));
 }
 
+/**
+ * Entitled stores whose product, not just one variant, changes with a piece's
+ * stock: Metal × Size (which piece backs a variant, how many it holds) and any
+ * store with the stock table in its description (the table lists live pieces).
+ * Their design re-syncs. Pure, so the filter is testable without a database.
+ */
+export function designResyncConnections(
+  active: ConnectionRow[],
+  entitledCustomerIds: ReadonlySet<number>,
+): ConnectionRow[] {
+  return active.filter(
+    (c) =>
+      c.sync_products &&
+      c.sync_inventory &&
+      c.customer_id != null &&
+      entitledCustomerIds.has(c.customer_id) &&
+      (connectionVariantLayout(c) === "metal_size" || c.sync_product_description === true),
+  );
+}
+
 export async function fanOutInventoryUpdated(
   event: InventoryUpdatedEvent,
 ): Promise<{
@@ -146,6 +171,21 @@ export async function fanOutInventoryUpdated(
 
   let skeleton = false;
   let productSyncEnqueued = 0;
+
+  // With no piece mapping anywhere, the catalog fan-out below already queues a
+  // design sync for every entitled store, these included.
+  if (jobs.length > 0) {
+    for (const c of designResyncConnections(active, entitledSet)) {
+      await enqueueProductSync({
+        kind: "product.sync",
+        connectionId: c.id,
+        platform: c.platform,
+        designNo,
+        action: "sync",
+      });
+      productSyncEnqueued += 1;
+    }
+  }
 
   if (jobs.length === 0) {
     // Unmapped: product.sync only for entitled connections (catalogFanOut filters).

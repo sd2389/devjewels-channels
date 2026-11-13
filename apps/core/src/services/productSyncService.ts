@@ -10,7 +10,12 @@ import {
   InventorySkipError,
   NotImplementedError,
 } from "@/channels/types";
-import { getConnectionById } from "@/services/connections";
+import { connectionVariantLayout, getConnectionById } from "@/services/connections";
+import {
+  metalSizeLogMessage,
+  syncDesignMetalSize,
+  zeroDesignMetalSizeSlots,
+} from "@/services/metalSizeSync";
 import { storeApiClient } from "@/integrations/storeApi/client";
 import {
   designInFeed,
@@ -30,6 +35,7 @@ import {
   upsertProductMapping,
 } from "@/services/productMappings";
 import { getVariantMappingStore } from "@/services/variantMappings";
+import { getVariantSlotStore } from "@/services/variantSlots";
 import { writeSyncLog } from "@/services/syncLog";
 import { enqueueInventorySync } from "@/services/queue";
 import type { ProductSyncJob } from "@/workers/handlers";
@@ -96,6 +102,24 @@ async function runProductDelete(
     return "SKIPPED";
   }
 
+  // Metal × Size: the same rule, but the pieces live in variant slots.
+  if (!connection.sync_product_content && connectionVariantLayout(connection) === "metal_size") {
+    const zeroed = await zeroDesignMetalSizeSlots({
+      connection,
+      adapter: AdapterRouter.get(job.platform),
+      designNo,
+    });
+    await writeSyncLog({
+      connectionId: job.connectionId,
+      platform: job.platform,
+      jobType: "product",
+      status: "SUCCESS",
+      designNo,
+      message: `revoked_zeroed slots=${zeroed} (product kept, merchant owns content)`,
+    });
+    return "DELETED";
+  }
+
   // A merchant-owned product is never deleted: its page, URL, photos, reviews
   // and SEO are the merchant's work, and a revoke must not destroy them. Zeroing
   // every mapped piece takes the design off sale, which is what revoke is for,
@@ -137,6 +161,9 @@ async function runProductDelete(
     });
     await mappingStore.deleteByDesign(job.connectionId, designNo);
     await getVariantMappingStore().deleteByDesign(job.connectionId, designNo);
+    if (connectionVariantLayout(connection) === "metal_size") {
+      await getVariantSlotStore().deleteByDesign(job.connectionId, designNo);
+    }
     await writeSyncLog({
       connectionId: job.connectionId,
       platform: job.platform,
@@ -385,6 +412,56 @@ export async function runProductSyncJob(
     return "SKIPPED";
   }
 
+  if (connectionVariantLayout(connection) === "metal_size") {
+    try {
+      const result = await syncDesignMetalSize({
+        connection,
+        adapter,
+        designNo,
+        title,
+        imageUrls,
+        productType,
+        tags,
+        category,
+        existingProductId: existing?.external_product_id || undefined,
+        canViewPrices,
+        pieces: canViewInventory && !resolved.outOfStock ? variants : [],
+        fallbackPrice: variants[0]?.price ?? defaultPrice,
+        writeInventory: connection.sync_inventory || !canViewInventory,
+      });
+      await writeSyncLog({
+        connectionId: job.connectionId,
+        platform: job.platform,
+        jobType: "product",
+        status: "SUCCESS",
+        designNo,
+        message: metalSizeLogMessage(result),
+      });
+      return result.outcome;
+    } catch (err) {
+      if (err instanceof InventorySkipError) {
+        await writeSyncLog({
+          connectionId: job.connectionId,
+          platform: job.platform,
+          jobType: "product",
+          status: "SKIPPED",
+          designNo,
+          message: err.reason,
+        });
+        return "SKIPPED";
+      }
+      await writeSyncLog({
+        connectionId: job.connectionId,
+        platform: job.platform,
+        jobType: "product",
+        status: isRateLimitError(err) ? "RETRYING" : "FAILED",
+        designNo,
+        message: safeErrorMessage(err),
+      });
+      throw err;
+    }
+  }
+
   try {
     let outcome: ProductSyncOutcome;
     let resultVariants: Array<{
@@ -428,6 +505,7 @@ export async function runProductSyncJob(
         designNo,
         title,
         syncProductContent: connection.sync_product_content,
+        syncProductDescription: connection.sync_product_description ?? false,
         credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
         externalProductId: existing.external_product_id,
         imageUrls,
@@ -471,6 +549,7 @@ export async function runProductSyncJob(
         designNo,
         title,
         syncProductContent: connection.sync_product_content,
+        syncProductDescription: connection.sync_product_description ?? false,
         credentialsSecretRef: connection.credentials_secret_ref ?? undefined,
         imageUrls,
         productType,

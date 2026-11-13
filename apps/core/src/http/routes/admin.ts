@@ -17,7 +17,11 @@ import {
   replaceDesignMarkups,
   type DesignMarkupInput,
 } from "@/services/connectionDesignMarkups";
-import { updateConnectionMarkup } from "@/services/connections";
+import {
+  connectionVariantLayout,
+  updateConnectionCatalogLayout,
+  updateConnectionMarkup,
+} from "@/services/connections";
 import type { MarkupMode } from "@/services/markup";
 import { createShopifyConnectInvite } from "@/services/shopifyInviteService";
 import { assertMyshopifyDomain } from "@devjewels-channels/shopify/auth";
@@ -41,6 +45,8 @@ export async function getAdminConnections(req: Request): Promise<Response> {
         sync_inventory: c.connection.sync_inventory,
         sync_products: c.connection.sync_products,
         sync_product_content: c.connection.sync_product_content,
+        variant_layout: connectionVariantLayout(c.connection),
+        sync_product_description: c.connection.sync_product_description ?? false,
         shop_domain: c.shopDomain,
         locations: c.locations,
         primary_location_id:
@@ -271,6 +277,8 @@ export async function postAdminConnectionById(
       markupMode?: "none" | "percent" | "multiplier";
       markupValue?: number;
       designMarkups?: unknown;
+      variantLayout?: string;
+      syncProductDescription?: boolean;
     };
     const action = body.action || "";
 
@@ -285,6 +293,30 @@ export async function postAdminConnectionById(
     if (action === "import_catalog") {
       const result = await importCatalogForConnection(id);
       return json({ import: result });
+    }
+
+    if (action === "set_catalog_layout") {
+      const layout = String(body.variantLayout ?? "");
+      if (layout !== "piece" && layout !== "metal_size") {
+        return json({ error: "variantLayout must be piece or metal_size" }, 400);
+      }
+      if (typeof body.syncProductDescription !== "boolean") {
+        return json({ error: "syncProductDescription must be true or false" }, 400);
+      }
+      const updated = await updateConnectionCatalogLayout(id, {
+        variantLayout: layout,
+        syncProductDescription: body.syncProductDescription,
+      });
+      if (!updated) {
+        return json({ error: "Connection not found" }, 404);
+      }
+      return json({
+        connection: {
+          id: updated.id,
+          variant_layout: connectionVariantLayout(updated),
+          sync_product_description: updated.sync_product_description ?? false,
+        },
+      });
     }
 
     if (action === "set_markup") {
@@ -343,7 +375,7 @@ export async function postAdminConnectionById(
     return json(
       {
         error:
-          "Unknown action (use set_location, import_catalog, or set_markup)",
+          "Unknown action (use set_location, import_catalog, set_markup, or set_catalog_layout)",
       },
       400,
     );

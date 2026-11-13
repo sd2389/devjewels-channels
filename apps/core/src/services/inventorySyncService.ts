@@ -9,7 +9,7 @@ import {
   InventorySkipError,
   NotImplementedError,
 } from "@/channels/types";
-import { getConnectionById } from "@/services/connections";
+import { connectionVariantLayout, getConnectionById } from "@/services/connections";
 import { writeSyncLog } from "@/services/syncLog";
 import { getVariantMapping } from "@/services/variantMappings";
 import type { InventorySyncJob } from "@/workers/handlers";
@@ -111,6 +111,22 @@ export async function runInventorySyncJob(
       designNo: job.designNo,
       jobNo: job.jobNo,
       message: "not_entitled_inventory",
+    });
+    return "SKIPPED";
+  }
+
+  // Metal × Size stores have no per-piece variant: a piece's stock change
+  // re-syncs its design (inventoryFanOut). An old piece mapping would point at
+  // a variant that no longer exists, so a stray per-piece job is skipped.
+  if (connectionVariantLayout(connection) === "metal_size") {
+    await writeSyncLog({
+      connectionId: job.connectionId,
+      platform: job.platform,
+      jobType: "inventory",
+      status: "SKIPPED",
+      designNo: job.designNo,
+      jobNo: job.jobNo,
+      message: "metal_size_layout",
     });
     return "SKIPPED";
   }

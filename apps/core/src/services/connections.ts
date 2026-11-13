@@ -6,6 +6,17 @@ import { CHANNELS_SCHEMA, tryGetChannelsDb, type SqlClient } from "@/db/shared/c
 import type { ChannelPlatform } from "@/channels/types";
 import type { MarkupMode } from "@/services/markup";
 
+/**
+ * How a design's stock becomes Shopify variants.
+ * - piece: one variant per stock piece (job_no). The default.
+ * - metal_size: one variant per Metal × Size, cheapest live piece sold first.
+ */
+export type VariantLayout = "piece" | "metal_size";
+
+export function normalizeVariantLayout(raw: unknown): VariantLayout {
+  return String(raw || "").trim().toLowerCase() === "metal_size" ? "metal_size" : "piece";
+}
+
 export type ConnectionRow = {
   id: string;
   platform: ChannelPlatform;
@@ -22,6 +33,10 @@ export type ConnectionRow = {
   /** When false, mapped products only get inventory qty + unit cost on sync. */
   sync_product_content: boolean;
   sync_orders: boolean;
+  /** Unset reads as "piece" (rows built before migration 005, test seeds). */
+  variant_layout?: VariantLayout;
+  /** Write the live stock table into the description, nothing else of content. */
+  sync_product_description?: boolean;
 };
 
 export type CreateConnectionInput = {
@@ -79,6 +94,10 @@ export type ConnectionStore = {
       syncProductContent?: boolean;
     },
   ): Promise<ConnectionRow | null>;
+  updateCatalogLayout(
+    id: string,
+    layout: { variantLayout: VariantLayout; syncProductDescription: boolean },
+  ): Promise<ConnectionRow | null>;
 };
 
 type DbConnectionRow = {
@@ -96,6 +115,8 @@ type DbConnectionRow = {
   sync_products: boolean;
   sync_product_content: boolean;
   sync_orders: boolean;
+  variant_layout: string | null;
+  sync_product_description: boolean | null;
 };
 
 function normalizeMarkupMode(raw: unknown): MarkupMode {
@@ -131,6 +152,8 @@ function mapRow(row: DbConnectionRow): ConnectionRow | null {
     sync_products: row.sync_products ?? true,
     sync_product_content: row.sync_product_content ?? false,
     sync_orders: row.sync_orders,
+    variant_layout: normalizeVariantLayout(row.variant_layout),
+    sync_product_description: row.sync_product_description ?? false,
   };
 }
 
@@ -138,7 +161,7 @@ const SELECT_COLS = `id::text AS id, platform, name, is_active, credentials_secr
                 customer_id, markup_mode, markup_value, markup_bps,
                 sync_inventory, sync_price, sync_products,
                 COALESCE(sync_product_content, FALSE) AS sync_product_content,
-                sync_orders`;
+                sync_orders, variant_layout, sync_product_description`;
 
 function pgStore(db: SqlClient): ConnectionStore {
   return {
@@ -330,6 +353,20 @@ function pgStore(db: SqlClient): ConnectionStore {
       const row = result.rows[0];
       return row ? mapRow(row) : null;
     },
+
+    async updateCatalogLayout(id, layout) {
+      const result = await db.query<DbConnectionRow>(
+        `UPDATE ${CHANNELS_SCHEMA}.connection
+         SET variant_layout = $2,
+             sync_product_description = $3,
+             updated_at = now()
+         WHERE id = $1::uuid
+         RETURNING ${SELECT_COLS}`,
+        [id, layout.variantLayout, layout.syncProductDescription],
+      );
+      const row = result.rows[0];
+      return row ? mapRow(row) : null;
+    },
   };
 }
 
@@ -439,6 +476,17 @@ export function createMemoryConnectionStore(
       rows.set(id, next);
       return next;
     },
+    async updateCatalogLayout(id, layout) {
+      const existing = rows.get(id);
+      if (!existing) return null;
+      const next: ConnectionRow = {
+        ...existing,
+        variant_layout: layout.variantLayout,
+        sync_product_description: layout.syncProductDescription,
+      };
+      rows.set(id, next);
+      return next;
+    },
   };
 }
 
@@ -532,4 +580,16 @@ export async function updateConnectionSyncFlags(
   },
 ): Promise<ConnectionRow | null> {
   return getConnectionStore().updateSyncFlags(id, flags);
+}
+
+export async function updateConnectionCatalogLayout(
+  id: string,
+  layout: { variantLayout: VariantLayout; syncProductDescription: boolean },
+): Promise<ConnectionRow | null> {
+  return getConnectionStore().updateCatalogLayout(id, layout);
+}
+
+/** The connection's layout, with rows built before migration 005 as "piece". */
+export function connectionVariantLayout(connection: Pick<ConnectionRow, "variant_layout">): VariantLayout {
+  return normalizeVariantLayout(connection.variant_layout);
 }
