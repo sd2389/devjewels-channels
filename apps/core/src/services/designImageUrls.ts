@@ -1,6 +1,12 @@
 /**
- * Resolve public CDN image URLs for Shopify productCreateMedia.
- * Builds White / Yellow / Rose (+ Live) and angles 1–3 so all metal colors sync.
+ * Resolve image URLs for Shopify productCreateMedia.
+ *
+ * When storeapi lists the design's real R2 photos it sends them as
+ * `image_urls` with `image_urls_complete: true`; those go to the store as is.
+ * Only without that flag (tenant media off, or the R2 listing failed) do we
+ * guess White / Yellow / Rose (+ Live) paths on the public CDN. Production's
+ * CDN holds only the main White photo for most designs, so guessed URLs there
+ * 403 and Shopify drops them.
  */
 
 const CDN_BASE = "https://cdn.devjewels.com";
@@ -10,8 +16,10 @@ const METAL_COLORS = ["White", "Yellow", "Rose"] as const;
 const LIVE_FOLDER = "Live";
 /** Image angles per color: D_-1, H_-2, -3 (matches frontend thumbnail helpers). */
 const IMAGE_NUMBERS = [1, 2, 3] as const;
-/** Cap so Shopify create stays bounded (3 metals × 3 + Live). */
+/** Cap for guessed CDN paths (3 metals × 3 + Live). */
 const MAX_IMAGES = 12;
+/** Cap for a listed R2 gallery (storeapi sends at most 24). */
+const MAX_LISTED_IMAGES = 24;
 
 function normalizeColor(raw: unknown): string {
   const s = String(raw || "").trim();
@@ -61,6 +69,7 @@ export function resolveDesignImageUrls(input: {
   thumbnailUrl?: unknown;
   imageBasePath?: unknown;
   defaultColor?: unknown;
+  imageUrlsComplete?: unknown;
 }): string[] {
   const designNo = String(input.designNo || "").trim();
   if (!designNo) return [];
@@ -73,6 +82,12 @@ export function resolveDesignImageUrls(input: {
     seen.add(u);
     out.push(u);
   };
+
+  if (input.imageUrlsComplete === true) {
+    // storeapi listed every photo that exists; never add guessed paths.
+    for (const u of Array.isArray(input.imageUrls) ? input.imageUrls : []) push(u);
+    return out.slice(0, MAX_LISTED_IMAGES);
+  }
 
   const defaultColor = normalizeColor(input.defaultColor);
   const base = designBase(designNo, String(input.imageBasePath || ""));
