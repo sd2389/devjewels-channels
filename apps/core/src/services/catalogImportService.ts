@@ -143,6 +143,7 @@ async function collectEligibleDesigns(
           thumbnailUrl: item.thumbnail_url,
           imageBasePath: item.image_base_path,
           defaultColor: item.default_color,
+          imageUrlsComplete: item.image_urls_complete,
         }),
         productType: taxonomy.productType,
         tags: taxonomy.tags,

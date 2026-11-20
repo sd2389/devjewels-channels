@@ -311,6 +311,7 @@ export async function runProductSyncJob(
       thumbnailUrl: product.thumbnail_url,
       imageBasePath: product.image_base_path,
       defaultColor: product.default_color,
+      imageUrlsComplete: product.image_urls_complete,
     });
     const taxonomy = resolveDesignShopifyTaxonomy({
       category: product.category,

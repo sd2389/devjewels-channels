@@ -16,6 +16,7 @@
     "selfcheck:events": "npx --yes tsx src/services/events.selfcheck.ts",
     "selfcheck:inventory": "npx --yes tsx src/services/inventory.selfcheck.ts",
     "selfcheck:catalog": "npx --yes tsx src/services/catalog.selfcheck.ts",
+    "selfcheck:design-images": "npx --yes tsx src/services/designImageUrls.selfcheck.ts",
     "selfcheck:product-sync": "npx --yes tsx src/services/productSync.selfcheck.ts",
     "selfcheck:orders": "npx --yes tsx src/services/orders.selfcheck.ts",
     "selfcheck:connect": "npx --yes tsx src/services/connect.selfcheck.ts",
